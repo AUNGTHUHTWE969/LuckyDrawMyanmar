@@ -107,3 +107,65 @@ class LotterySystem:
                 self.bot.send_message(admin_id, message)
             except Exception as e:
                 print(f"စီမံခန့်ခွဲသူ {admin_id} အား အကြောင်းကြားရာတွင် မအောင်မြင်ပါ: {e}")
+
+    def get_draw_statistics(self, date=None):
+        """ကံစမ်းမဲစာရင်းဇယားများရယူရန်"""
+        if date is None:
+            date = datetime.now().strftime('%Y-%m-%d')
+        
+        try:
+            stats = {
+                'date': date,
+                'total_tickets': self.db.get_daily_ticket_count(date),
+                'total_sales': self.db.get_daily_ticket_sales(date),
+                'winners': self.db.get_daily_winners(date),
+                'prize_pool': 0,
+                'winner_count': 0
+            }
+            
+            if stats['winners']:
+                stats['winner_count'] = len(stats['winners'])
+                stats['prize_pool'] = sum(winner[2] for winner in stats['winners'])
+            
+            return stats
+            
+        except Exception as e:
+            print(f"စာရင်းဇယားရယူရာတွင် အမှားဖြစ်နေသည်: {e}")
+            return None
+
+    def manual_draw(self, admin_id, date=None):
+        """လက်ဖြင့်ကံစမ်းမဲပြုလုပ်ခြင်း"""
+        if admin_id not in config.ADMIN_IDS:
+            return "❌ ဤလုပ်ဆောင်ချက်အတွက် ခွင့်ပြုချက်မရှိပါ"
+        
+        try:
+            if date is None:
+                date = datetime.now().strftime('%Y-%m-%d')
+            
+            self.notify_admins(f"🔔 စီမံခန့်ခွဲသူ {admin_id} မှ လက်ဖြင့်ကံစမ်းမဲပြုလုပ်နေသည်...")
+            self.run_daily_draw()
+            return "✅ ကံစမ်းမဲအောင်မြင်စွာပြုလုပ်ပြီးပါပြီ"
+            
+        except Exception as e:
+            error_msg = f"❌ လက်ဖြင့်ကံစမ်းမဲပြုလုပ်ရာတွင် အမှားဖြစ်နေသည်: {str(e)}"
+            self.notify_admins(error_msg)
+            return error_msg
+
+    def check_draw_status(self):
+        """ယနေ့ကံစမ်းမဲအခြေအနေစစ်ဆေးခြင်း"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        stats = self.get_draw_statistics(today)
+        
+        if stats is None:
+            return "❌ စာရင်းဇယားရယူရာတွင် အမှားဖြစ်နေသည်"
+        
+        status_message = (
+            f"📊 **ယနေ့ကံစမ်းမဲအခြေအနေ**\n"
+            f"📅 ရက်စွဲ: {today}\n"
+            f"🎫 စုစုပေါင်းကံစမ်းမဲ: {stats['total_tickets']} ခု\n"
+            f"💰 စုစုပေါင်းရောင်းအား: {stats['total_sales']:,.0f} ကျပ်\n"
+            f"🎯 ကံစမ်းမဲပေါက်သူ: {stats['winner_count']} ဦး\n"
+            f"🏆 စုစုပေါင်းဆုကြေးငွေ: {stats['prize_pool']:,.0f} ကျပ်"
+        )
+        
+        return status_message
