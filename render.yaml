@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: lucky-draw-myanmar-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main_bot.py
+    envVars:
+      - key: BOT_TOKEN
+        value: your_bot_token_here
+      - key: ADMIN_IDS
+        value: "123456789,987654321"
+      - key: ANNOUNCEMENT_CHANNEL
+        value: "@luckydrawmyanmarofficial"
+      - key: KPAY_NAME
+        value: "AUNG THU HTWE"
+      - key: KPAY_PHONE
+        value: "09789999368"
+      - key: WAVEPAY_NAME
+        value: "AUNG THU HTWE"
+      - key: WAVEPAY_PHONE
+        value: "09789999368"
+      - key: DAILY_DRAW_TIME
+        value: "21:00"
+      - key: TICKET_PRICE
+        value: "100"
