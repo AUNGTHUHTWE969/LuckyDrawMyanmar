@@ -318,7 +318,7 @@ class DatabaseManager:
         """Get pending transactions"""
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT t.*, u.username, u.first_name 
+            SELECT t.*, u.username, u.first_name, u.register_name, u.phone_number as user_phone
             FROM transactions t 
             JOIN users u ON t.user_id = u.user_id 
             WHERE t.type = ? AND t.status = 'pending'
@@ -399,4 +399,40 @@ class DatabaseManager:
             WHERE user_id = ? 
             ORDER BY created_at DESC
         ''', (user_id,))
+        return cursor.fetchall()
+    
+    def get_all_withdrawals(self, status=None, limit=50):
+        """Get all withdrawal records"""
+        cursor = self.conn.cursor()
+        
+        if status:
+            cursor.execute('''
+                SELECT t.*, u.username, u.first_name, u.register_name, u.phone_number as user_phone
+                FROM transactions t 
+                JOIN users u ON t.user_id = u.user_id 
+                WHERE t.type = 'withdraw' AND t.status = ?
+                ORDER BY t.created_at DESC
+                LIMIT ?
+            ''', (status, limit))
+        else:
+            cursor.execute('''
+                SELECT t.*, u.username, u.first_name, u.register_name, u.phone_number as user_phone
+                FROM transactions t 
+                JOIN users u ON t.user_id = u.user_id 
+                WHERE t.type = 'withdraw'
+                ORDER BY t.created_at DESC
+                LIMIT ?
+            ''', (limit,))
+        
+        return cursor.fetchall()
+    
+    def get_user_transactions(self, user_id, limit=20):
+        """Get user's transaction history"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT * FROM transactions 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC
+            LIMIT ?
+        ''', (user_id, limit))
         return cursor.fetchall()
