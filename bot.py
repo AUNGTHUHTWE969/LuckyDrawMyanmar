@@ -14,7 +14,7 @@ import sqlite3
 import asyncio
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Updater, CallbackContext, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.error import TelegramError
 
 # Configure logging
@@ -543,10 +543,9 @@ class DatabaseManager:
             return False
 
 class LotterySystem:
-    def __init__(self, db_manager, updater):
+    def __init__(self, db_manager, application):
         self.db = db_manager
-        self.updater = updater
-        self.bot = updater.bot
+        self.application = application
         self.setup_daily_draw()
 
     def setup_daily_draw(self):
@@ -570,7 +569,7 @@ class LotterySystem:
         else:
             logger.info("❌ Auto draw is disabled")
 
-    def send_live_payment_update(self, user_id, username, first_name, amount, transaction_type, transaction_id=None):
+    async def send_live_payment_update(self, user_id, username, first_name, amount, transaction_type, transaction_id=None):
         try:
             if transaction_type == "deposit":
                 emoji = "💳"
@@ -602,7 +601,7 @@ class LotterySystem:
 #LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER
             """
             
-            self.bot.send_message(
+            await self.application.bot.send_message(
                 chat_id=Config.PAYMENT_LOG_CHANNEL,
                 text=live_message,
                 parse_mode='Markdown'
@@ -610,17 +609,17 @@ class LotterySystem:
         except Exception as e:
             logger.error(f"❌ Error sending live payment update: {e}")
 
-    def notify_admins(self, message, reply_markup=None):
+    async def notify_admins(self, message, reply_markup=None):
         for admin_id in Config.ADMIN_IDS:
             try:
                 if reply_markup:
-                    self.bot.send_message(admin_id, message, parse_mode='Markdown', reply_markup=reply_markup)
+                    await self.application.bot.send_message(admin_id, message, parse_mode='Markdown', reply_markup=reply_markup)
                 else:
-                    self.bot.send_message(admin_id, message, parse_mode='Markdown')
+                    await self.application.bot.send_message(admin_id, message, parse_mode='Markdown')
             except Exception as e:
                 logger.error(f"Admin notification error for {admin_id}: {e}")
 
-    def create_payment_request(self, user_id, username, first_name, amount, payment_method, transaction_proof=None):
+    async def create_payment_request(self, user_id, username, first_name, amount, payment_method, transaction_proof=None):
         request_id, transaction_id = self.db.create_payment_request(user_id, username, first_name, amount, payment_method, transaction_proof)
         if request_id:
             admin_message = f"""
@@ -645,11 +644,11 @@ class LotterySystem:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            self.notify_admins(admin_message, reply_markup)
+            await self.notify_admins(admin_message, reply_markup)
             return request_id, transaction_id
         return None, None
 
-    def approve_payment_request(self, request_id, admin_id, admin_note=None):
+    async def approve_payment_request(self, request_id, admin_id, admin_note=None):
         request = self.db.get_payment_request(request_id)
         if not request:
             return False, "Request not found"
@@ -667,7 +666,7 @@ class LotterySystem:
             )
             
             try:
-                self.bot.send_message(
+                await self.application.bot.send_message(
                     request[1],
                     f"""
 ✅ **သင့်ငွေသွင်းမှု အောင်မြင်ပါသည်**
@@ -686,14 +685,14 @@ class LotterySystem:
             except Exception as e:
                 logger.error(f"Error notifying user: {e}")
             
-            self.send_live_payment_update(
+            await self.send_live_payment_update(
                 request[1], request[2], request[3], request[4], "deposit", request[10]
             )
             
             return True, "Payment approved successfully"
         return False, "Error updating balance"
 
-    def reject_payment_request(self, request_id, admin_id, admin_note=None):
+    async def reject_payment_request(self, request_id, admin_id, admin_note=None):
         request = self.db.get_payment_request(request_id)
         if not request:
             return False, "Request not found"
@@ -704,7 +703,7 @@ class LotterySystem:
         self.db.update_payment_request_status(request_id, 'rejected', admin_id, admin_note)
         
         try:
-            self.bot.send_message(
+            await self.application.bot.send_message(
                 request[1],
                 f"""
 ❌ **သင့်ငွေသွင်းမှု ငြင်းပယ်ခံရသည်**
@@ -726,7 +725,7 @@ class LotterySystem:
         
         return True, "Payment rejected successfully"
 
-    def create_withdrawal_request(self, user_id, username, first_name, amount, payment_method, account_info):
+    async def create_withdrawal_request(self, user_id, username, first_name, amount, payment_method, account_info):
         user = self.db.get_user(user_id)
         if not user or user[5] < amount:
             return None, None, "လက်ကျန်ငွေမလုံလောက်ပါ"
@@ -770,11 +769,11 @@ class LotterySystem:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            self.notify_admins(admin_message, reply_markup)
+            await self.notify_admins(admin_message, reply_markup)
             return request_id, transaction_id, "Withdrawal request submitted successfully"
         return None, None, "Error creating withdrawal request"
 
-    def approve_withdrawal_request(self, request_id, admin_id, admin_note=None):
+    async def approve_withdrawal_request(self, request_id, admin_id, admin_note=None):
         request = self.db.get_withdrawal_request(request_id)
         if not request:
             return False, "Request not found"
@@ -793,7 +792,7 @@ class LotterySystem:
         user_full_name = f"{user[2]} {user[3]}" if user[3] else user[2]
         
         try:
-            self.bot.send_message(
+            await self.application.bot.send_message(
                 request[1],
                 f"""
 ✅ **သင့်ငွေထုတ်မှု အောင်မြင်ပါသည်**
@@ -819,13 +818,13 @@ class LotterySystem:
         except Exception as e:
             logger.error(f"Error notifying user: {e}")
         
-        self.send_live_payment_update(
+        await self.send_live_payment_update(
             request[1], request[2], request[3], request[4], "withdrawal", request[10]
         )
         
         return True, "Withdrawal approved successfully"
 
-    def reject_withdrawal_request(self, request_id, admin_id, admin_note=None):
+    async def reject_withdrawal_request(self, request_id, admin_id, admin_note=None):
         request = self.db.get_withdrawal_request(request_id)
         if not request:
             return False, "Request not found"
@@ -845,7 +844,7 @@ class LotterySystem:
         user_full_name = f"{user[2]} {user[3]}" if user[3] else user[2]
         
         try:
-            self.bot.send_message(
+            await self.application.bot.send_message(
                 request[1],
                 f"""
 ❌ **သင့်ငွေထုတ်မှု ငြင်းပယ်ခံရသည်**
@@ -907,7 +906,7 @@ class LotterySystem:
         else:
             return None
 
-    def buy_ticket_with_confirmation(self, user_id, username, first_name, ticket_count=1):
+    async def buy_ticket_with_confirmation(self, user_id, username, first_name, ticket_count=1):
         """Buy tickets with confirmation"""
         try:
             ticket_price = self.get_ticket_price()
@@ -944,7 +943,7 @@ class LotterySystem:
             logger.error(f"Error in ticket confirmation: {e}")
             return "❌ ကံစမ်းမဲဝယ်ယူရာတွင် အမှားဖြစ်နေသည်", 0, 0
 
-    def confirm_ticket_purchase(self, user_id, username, first_name, ticket_count, total_amount):
+    async def confirm_ticket_purchase(self, user_id, username, first_name, ticket_count, total_amount):
         """Confirm and process ticket purchase"""
         try:
             cursor = self.db.connection.cursor()
@@ -967,18 +966,9 @@ class LotterySystem:
             cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
             new_balance = cursor.fetchone()[0]
             
-            # Use threading for async operation in sync context
-            def send_update():
-                try:
-                    self.send_live_payment_update(
-                        user_id, username, first_name, total_amount, "ticket_purchase", transaction_id
-                    )
-                except Exception as e:
-                    logger.error(f"Error sending live update: {e}")
-            
-            update_thread = threading.Thread(target=send_update)
-            update_thread.daemon = True
-            update_thread.start()
+            asyncio.create_task(self.send_live_payment_update(
+                user_id, username, first_name, total_amount, "ticket_purchase", transaction_id
+            ))
             
             return (f"✅ ကံစမ်းမဲ {ticket_count} ခု ဝယ်ယူပြီးပါပြီ!\n\n"
                     f"📊 အချက်အလက်များ:\n"
@@ -995,7 +985,7 @@ class LotterySystem:
             logger.error(f"Error confirming ticket purchase: {e}")
             return "❌ ကံစမ်းမဲဝယ်ယူရာတွင် အမှားဖြစ်နေသည်"
 
-    def run_daily_draw(self):
+    async def run_daily_draw(self):
         """Run the daily lottery draw"""
         try:
             today = datetime.now().strftime('%Y-%m-%d')
@@ -1034,14 +1024,14 @@ class LotterySystem:
                     
                     announcement_channel = self.db.get_setting('announcement_channel', Config.ANNOUNCEMENT_CHANNEL)
                     if announcement_channel:
-                        self.bot.send_message(
+                        await self.application.bot.send_message(
                             chat_id=announcement_channel,
                             text=announcement,
                             parse_mode='Markdown'
                         )
                     
                     try:
-                        self.bot.send_message(
+                        await self.application.bot.send_message(
                             chat_id=winner[0],
                             text=f"""
 🎉 **Congratulations! You Won!** 🎉
@@ -1066,7 +1056,7 @@ class LotterySystem:
         except Exception as e:
             logger.error(f"❌ Error running daily draw: {e}")
 
-# Menu Builder Functions (same as before, but using sync approach)
+# Menu Builder Functions
 def get_main_menu(user_id=None, db_manager=None):
     is_admin = db_manager.is_admin(user_id) if db_manager and user_id else False
     
@@ -1127,7 +1117,7 @@ def get_reply_keyboard(user_id=None, db_manager=None):
     if is_admin:
         keyboard.append([KeyboardButton("👑 Admin Panel")])
     
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 def get_buy_ticket_menu():
     keyboard = [
@@ -1203,7 +1193,7 @@ def get_help_menu():
     return InlineKeyboardMarkup(keyboard)
 
 # Bot command handlers
-def start_command(update: Update, context: CallbackContext):
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     lottery_system = context.bot_data.get('lottery_system')
     db_manager = context.bot_data.get('db_manager')
@@ -1218,13 +1208,13 @@ def start_command(update: Update, context: CallbackContext):
     
     menu_text = get_main_menu(user.id, db_manager)
     
-    update.message.reply_text(
+    await update.message.reply_text(
         menu_text, 
         parse_mode='Markdown',
         reply_markup=get_reply_keyboard(user.id, db_manager)
     )
 
-def buy_ticket_command(update: Update, context: CallbackContext):
+async def buy_ticket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     lottery_system = context.bot_data.get('lottery_system')
     
@@ -1237,13 +1227,13 @@ def buy_ticket_command(update: Update, context: CallbackContext):
         )
     
     ticket_price = lottery_system.get_ticket_price() if lottery_system else 1000
-    update.message.reply_text(
+    await update.message.reply_text(
         f"**ကံစမ်းမဲဝယ်ယူရန်**\n\n🎫 ကံစမ်းမဲတစ်ခုလျှင်: {ticket_price:,} ကျပ်\n\nမည်မျှကံစမ်းမဲဝယ်ယူမည်နည်း?\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
         parse_mode='Markdown',
         reply_markup=get_buy_ticket_menu()
     )
 
-def balance_command(update: Update, context: CallbackContext):
+async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     try:
         db_manager = context.bot_data.get('db_manager')
@@ -1251,40 +1241,40 @@ def balance_command(update: Update, context: CallbackContext):
             user_data = db_manager.get_user(user.id)
             balance = user_data[5] if user_data else 0
             
-            update.message.reply_text(
+            await update.message.reply_text(
                 f"💰 **သင့်လက်ကျန်ငွေ**\n\nလက်ကျန်ငွေ: {balance:,.0f} ကျပ်\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                 parse_mode='Markdown',
                 reply_markup=get_reply_keyboard(user.id, db_manager)
             )
     except Exception as e:
         logger.error(f"Balance command error: {e}")
-        update.message.reply_text(
+        await update.message.reply_text(
             "❌ လက်ကျန်ငွေကြည့်ရာတွင် အမှားဖြစ်နေသည်\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
             reply_markup=get_reply_keyboard(user.id, context.bot_data.get('db_manager'))
         )
 
-def deposit_command(update: Update, context: CallbackContext):
-    update.message.reply_text(
+async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "💳 **ငွေသွင်းရန်**\n\nကျေးဇူးပြု၍ ငွေသွင်းလိုသော နည်းလမ်းကိုရွေးချယ်ပါ:\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
         parse_mode='Markdown',
         reply_markup=get_deposit_menu()
     )
 
-def withdraw_command(update: Update, context: CallbackContext):
-    update.message.reply_text(
+async def withdraw_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "🏧 **ငွေထုတ်ရန်**\n\nကျေးဇူးပြု၍ ငွေထုတ်လိုသော နည်းလမ်းကိုရွေးချယ်ပါ:\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
         parse_mode='Markdown',
         reply_markup=get_withdrawal_menu()
     )
 
-def help_command(update: Update, context: CallbackContext):
-    update.message.reply_text(
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "🏆 **Lucky Draw Myanmar Help**\n\nကျေးဇူးပြု၍ အောက်ပါ option များထဲမှ တစ်ခုခုရွေးချယ်ပါ:\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
         parse_mode='Markdown',
         reply_markup=get_help_menu()
     )
 
-def profile_command(update: Update, context: CallbackContext):
+async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     lottery_system = context.bot_data.get('lottery_system')
     db_manager = context.bot_data.get('db_manager')
@@ -1314,39 +1304,39 @@ def profile_command(update: Update, context: CallbackContext):
 #LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER
             """
             
-            update.message.reply_text(
+            await update.message.reply_text(
                 profile_text,
                 parse_mode='Markdown',
                 reply_markup=get_reply_keyboard(user.id, db_manager)
             )
 
-def winners_command(update: Update, context: CallbackContext):
-    update.message.reply_text(
+async def winners_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "🏆 **ကံထူးရှင်ကြီးများ**\n\nကျေးဇူးပြု၍ ကြည့်ရှုလိုသော ကံထူးရှင်စာရင်းကို ရွေးချယ်ပါ:\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
         parse_mode='Markdown',
         reply_markup=get_winners_menu()
     )
 
-def admin_panel_command(update: Update, context: CallbackContext):
+async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_manager = context.bot_data.get('db_manager')
     
     if db_manager and db_manager.is_admin(user.id):
-        update.message.reply_text(
+        await update.message.reply_text(
             "👑 **Admin Panel**\n\nကျေးဇူးပြု၍ စီမံခန့်ခွဲမှုလုပ်ငန်းတစ်ခုခုရွေးချယ်ပါ:\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
             parse_mode='Markdown',
             reply_markup=get_admin_menu()
         )
     else:
-        update.message.reply_text(
+        await update.message.reply_text(
             "❌ Admin permission required\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
             reply_markup=get_reply_keyboard(user.id, db_manager)
         )
 
 # Button handler
-def button_handler(update: Update, context: CallbackContext):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    query.answer()
+    await query.answer()
     
     user = update.effective_user
     data = query.data
@@ -1359,7 +1349,7 @@ def button_handler(update: Update, context: CallbackContext):
     try:
         if data == "back_main":
             menu_text = get_main_menu(user.id, db_manager)
-            query.edit_message_text(
+            await query.edit_message_text(
                 menu_text,
                 parse_mode='Markdown',
                 reply_markup=get_reply_keyboard(user.id, db_manager)
@@ -1375,7 +1365,7 @@ def button_handler(update: Update, context: CallbackContext):
                 ticket_count = 10
             elif data == "custom_amount":
                 context.user_data['waiting_for_custom_amount'] = True
-                query.edit_message_text(
+                await query.edit_message_text(
                     "📝 **ကိုယ်ပိုင်ကံစမ်းမဲအရေအတွက်**\n\nကျေးဇူးပြု၍ ဝယ်ယူလိုသော ကံစမ်းမဲအရေအတွက်ကို ရိုက်ထည့်ပါ:\n\nဥပမာ: `3`\n\n**မှတ်ချက်:** တစ်ကြိမ်လျှင် အများဆုံး 50 ကံစမ်းမဲအထိသာ ဝယ်ယူနိုင်ပါသည်။\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                     parse_mode='Markdown',
                     reply_markup=get_back_menu()
@@ -1385,12 +1375,12 @@ def button_handler(update: Update, context: CallbackContext):
                 ticket_count = 1
             
             if lottery_system:
-                result, total_amount, ticket_count = lottery_system.buy_ticket_with_confirmation(
+                result, total_amount, ticket_count = await lottery_system.buy_ticket_with_confirmation(
                     user.id, user.username, user.first_name, ticket_count
                 )
                 
                 if result.startswith("❌"):
-                    query.edit_message_text(
+                    await query.edit_message_text(
                         result,
                         parse_mode='Markdown'
                     )
@@ -1400,7 +1390,7 @@ def button_handler(update: Update, context: CallbackContext):
                         'total_amount': total_amount
                     }
                     
-                    query.edit_message_text(
+                    await query.edit_message_text(
                         result,
                         parse_mode='Markdown',
                         reply_markup=get_ticket_confirmation_menu(ticket_count, total_amount)
@@ -1413,11 +1403,11 @@ def button_handler(update: Update, context: CallbackContext):
                 ticket_count = purchase_data['ticket_count']
                 total_amount = purchase_data['total_amount']
                 
-                result = lottery_system.confirm_ticket_purchase(
+                result = await lottery_system.confirm_ticket_purchase(
                     user.id, user.username, user.first_name, ticket_count, total_amount
                 )
                 
-                query.edit_message_text(
+                await query.edit_message_text(
                     result,
                     parse_mode='Markdown'
                 )
@@ -1429,7 +1419,7 @@ def button_handler(update: Update, context: CallbackContext):
             if 'pending_ticket_purchase' in context.user_data:
                 context.user_data.pop('pending_ticket_purchase', None)
             
-            query.edit_message_text(
+            await query.edit_message_text(
                 "❌ ကံစမ်းမဲဝယ်ယူမှု ပယ်ဖျက်လိုက်ပါပြီ။\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                 parse_mode='Markdown',
                 reply_markup=get_buy_ticket_menu()
@@ -1440,7 +1430,7 @@ def button_handler(update: Update, context: CallbackContext):
             if db_manager and db_manager.is_admin(user.id):
                 context.user_data['setting_draw_time'] = True
                 current_time = db_manager.get_draw_time()
-                query.edit_message_text(
+                await query.edit_message_text(
                     f"⏰ **ကံစမ်းမဲဖွင့်ချိန် ပြင်ဆင်ရန်**\n\nလက်ရှိဖွင့်ချိန်: `{current_time}`\n\nကျေးဇူးပြု၍ အသစ်ပြင်ဆင်လိုသော အချိန်ကို ရိုက်ထည့်ပါ:\n\nဥပမာ: `18:30`\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                     parse_mode='Markdown',
                     reply_markup=get_back_menu()
@@ -1448,20 +1438,20 @@ def button_handler(update: Update, context: CallbackContext):
             return
         
         else:
-            query.edit_message_text(
+            await query.edit_message_text(
                 f"🔘 Button: {data}\n\nThis feature is coming soon!\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                 reply_markup=get_back_menu()
             )
             
     except Exception as e:
         logger.error(f"❌ Button handler error: {e}")
-        query.edit_message_text(
+        await query.edit_message_text(
             "❌ An error occurred. Please try again.\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
             reply_markup=get_back_menu()
         )
 
 # Text message handler
-def handle_text_message(update: Update, context: CallbackContext):
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message_text = update.message.text.strip()
     
@@ -1469,32 +1459,32 @@ def handle_text_message(update: Update, context: CallbackContext):
     db_manager = context.bot_data.get('db_manager')
     
     if message_text == "🎫 ကံစမ်းမဲဝယ်ယူရန်":
-        buy_ticket_command(update, context)
+        await buy_ticket_command(update, context)
         return
     elif message_text == "💰 လက်ကျန်ငွေ":
-        balance_command(update, context)
+        await balance_command(update, context)
         return
     elif message_text == "💳 ငွေသွင်းရန်":
-        deposit_command(update, context)
+        await deposit_command(update, context)
         return
     elif message_text == "🏧 ငွေထုတ်ရန်":
-        withdraw_command(update, context)
+        await withdraw_command(update, context)
         return
     elif message_text == "📊 ကိုယ်ရေးအချက်အလက်":
-        profile_command(update, context)
+        await profile_command(update, context)
         return
     elif message_text == "🏆 ကံထူးရှင်ကြီးများ":
-        winners_command(update, context)
+        await winners_command(update, context)
         return
     elif message_text == "❓ အကူအညီ":
-        help_command(update, context)
+        await help_command(update, context)
         return
     elif message_text == "👑 Admin Panel":
-        admin_panel_command(update, context)
+        await admin_panel_command(update, context)
         return
     elif message_text == "🔙 မူလ Menu":
         menu_text = get_main_menu(user.id, db_manager)
-        update.message.reply_text(
+        await update.message.reply_text(
             menu_text,
             parse_mode='Markdown',
             reply_markup=get_reply_keyboard(user.id, db_manager)
@@ -1505,26 +1495,26 @@ def handle_text_message(update: Update, context: CallbackContext):
         try:
             ticket_count = int(message_text)
             if ticket_count <= 0:
-                update.message.reply_text(
+                await update.message.reply_text(
                     "❌ ကံစမ်းမဲအရေအတွက်သည် 0 ထက်ကြီးရပါမည်\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                     reply_markup=get_reply_keyboard(user.id, db_manager)
                 )
                 return
             
             if ticket_count > Config.MAX_TICKETS_PER_USER:
-                update.message.reply_text(
+                await update.message.reply_text(
                     f"❌ တစ်ကြိမ်လျှင် ကံစမ်းမဲ {Config.MAX_TICKETS_PER_USER} ခုထက်မပိုနိုင်ပါ\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                     reply_markup=get_reply_keyboard(user.id, db_manager)
                 )
                 return
             
             if lottery_system:
-                result, total_amount, ticket_count = lottery_system.buy_ticket_with_confirmation(
+                result, total_amount, ticket_count = await lottery_system.buy_ticket_with_confirmation(
                     user.id, user.username, user.first_name, ticket_count
                 )
                 
                 if result.startswith("❌"):
-                    update.message.reply_text(
+                    await update.message.reply_text(
                         result,
                         parse_mode='Markdown',
                         reply_markup=get_reply_keyboard(user.id, db_manager)
@@ -1535,7 +1525,7 @@ def handle_text_message(update: Update, context: CallbackContext):
                         'total_amount': total_amount
                     }
                     
-                    update.message.reply_text(
+                    await update.message.reply_text(
                         result,
                         parse_mode='Markdown',
                         reply_markup=get_ticket_confirmation_menu(ticket_count, total_amount)
@@ -1544,7 +1534,7 @@ def handle_text_message(update: Update, context: CallbackContext):
             context.user_data.pop('waiting_for_custom_amount', None)
             
         except ValueError:
-            update.message.reply_text(
+            await update.message.reply_text(
                 "❌ မှားယွင်းသောအရေအတွက်ဖြစ်နေသည်\nကျေးဇူးပြု၍ နံပါတ်သက်သက်ရိုက်ထည့်ပါ\n\nဥပမာ: `5`\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                 parse_mode='Markdown',
                 reply_markup=get_reply_keyboard(user.id, db_manager)
@@ -1557,7 +1547,7 @@ def handle_text_message(update: Update, context: CallbackContext):
             time_pattern = re.compile(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$')
             
             if not time_pattern.match(message_text):
-                update.message.reply_text(
+                await update.message.reply_text(
                     "❌ မှားယွင်းသောအချိန်ဖော်မတ်ဖြစ်နေသည်\nကျေးဇူးပြု၍ HH:MM ဖော်မတ်ဖြင့် ရိုက်ထည့်ပါ\n\nဥပမာ: `18:30`\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                     reply_markup=get_admin_menu()
                 )
@@ -1567,13 +1557,13 @@ def handle_text_message(update: Update, context: CallbackContext):
             if success:
                 lottery_system.setup_daily_draw()
                 
-                update.message.reply_text(
+                await update.message.reply_text(
                     f"✅ ကံစမ်းမဲဖွင့်ချိန်ကို `{message_text}` သို့ ပြောင်းလဲပြီးပါပြီ\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                     parse_mode='Markdown',
                     reply_markup=get_admin_menu()
                 )
             else:
-                update.message.reply_text(
+                await update.message.reply_text(
                     "❌ ကံစမ်းမဲဖွင့်ချိန် ပြောင်းလဲရာတွင် အမှားဖြစ်နေသည်\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                     reply_markup=get_admin_menu()
                 )
@@ -1581,25 +1571,25 @@ def handle_text_message(update: Update, context: CallbackContext):
             context.user_data.pop('setting_draw_time', None)
             
         except Exception as e:
-            update.message.reply_text(
+            await update.message.reply_text(
                 f"❌ အချိန်ပြောင်းလဲရာတွင် အမှားဖြစ်နေသည်: {e}\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                 reply_markup=get_admin_menu()
             )
         return
     
     menu_text = get_main_menu(user.id, db_manager)
-    update.message.reply_text(
+    await update.message.reply_text(
         menu_text,
         parse_mode='Markdown',
         reply_markup=get_reply_keyboard(user.id, db_manager)
     )
 
 # Error handler
-def error_handler(update: Update, context: CallbackContext):
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"❌ Bot error: {context.error}")
 
 # Main function
-def main():
+async def main():
     """Main function to run the bot"""
     # Validate configuration
     if not Config.BOT_TOKEN:
@@ -1609,35 +1599,37 @@ def main():
     # Initialize database
     db_manager = DatabaseManager()
     
-    # Create Telegram updater
-    updater = Updater(Config.BOT_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
+    # Create Telegram application
+    application = (
+        Application.builder()
+        .token(Config.BOT_TOKEN)
+        .build()
+    )
     
     # Store objects in bot_data
-    dispatcher.bot_data['db_manager'] = db_manager
-    lottery_system = LotterySystem(db_manager, updater)
-    dispatcher.bot_data['lottery_system'] = lottery_system
+    application.bot_data['db_manager'] = db_manager
+    lottery_system = LotterySystem(db_manager, application)
+    application.bot_data['lottery_system'] = lottery_system
     
     # Add handlers
-    dispatcher.add_handler(CommandHandler("start", start_command))
-    dispatcher.add_handler(CommandHandler("buy", buy_ticket_command))
-    dispatcher.add_handler(CommandHandler("balance", balance_command))
-    dispatcher.add_handler(CommandHandler("deposit", deposit_command))
-    dispatcher.add_handler(CommandHandler("withdraw", withdraw_command))
-    dispatcher.add_handler(CommandHandler("help", help_command))
-    dispatcher.add_handler(CommandHandler("profile", profile_command))
-    dispatcher.add_handler(CommandHandler("winners", winners_command))
-    dispatcher.add_handler(CommandHandler("admin", admin_panel_command))
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("buy", buy_ticket_command))
+    application.add_handler(CommandHandler("balance", balance_command))
+    application.add_handler(CommandHandler("deposit", deposit_command))
+    application.add_handler(CommandHandler("withdraw", withdraw_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("profile", profile_command))
+    application.add_handler(CommandHandler("winners", winners_command))
+    application.add_handler(CommandHandler("admin", admin_panel_command))
     
-    dispatcher.add_handler(CallbackQueryHandler(button_handler))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text_message))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     
-    dispatcher.add_error_handler(error_handler)
+    application.add_error_handler(error_handler)
     
     # Start the bot
     logger.info("🤖 Starting bot in polling mode...")
-    updater.start_polling()
-    updater.idle()
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
