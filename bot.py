@@ -1,3 +1,23 @@
+import sys
+import warnings
+
+# Fix for imghdr deprecation in Python 3.13
+try:
+    import imghdr
+except ModuleNotFoundError:
+    # Create a dummy imghdr module for Python 3.13+
+    import types
+    imghdr = types.ModuleType('imghdr')
+    imghdr.what = lambda file, h=None: None
+    sys.modules['imghdr'] = imghdr
+    warnings.warn("imghdr module not found - using dummy implementation")
+
+# Rest of your imports...
+import os
+import random
+import schedule
+import time
+# ... continue with your existing code
 import os
 import random
 import schedule
