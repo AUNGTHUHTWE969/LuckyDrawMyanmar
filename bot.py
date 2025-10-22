@@ -4,34 +4,39 @@ import schedule
 import time
 import threading
 import json
+import re
+import shutil
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import CallbackContext, Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
-from telegram import error as telegram_error
+from collections import defaultdict
+from typing import List, Dict, Optional, Tuple
+
 import sqlite3
 import asyncio
 import logging
-from starlette.applications import Starlette
-from starlette.routing import Route
-from starlette.requests import Request
-from starlette.responses import Response, PlainTextResponse
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import CallbackContext, Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram import error as telegram_error
 
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler('bot.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
 # Configuration Settings
 class Config:
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "8444084929:AAGhso9BSTUkKj8jmrEhKSHmIzg6BvUoYrk")
-    ADMIN_IDS = [8070878424]
-    ADMIN_USERNAME = "@luckydrawmyanmar"
-    ANNOUNCEMENT_CHANNEL = "@luckydrawmyanmarofficial"
-    PAYMENT_LOG_CHANNEL = "-1002141899845"
-    DAILY_DRAW_TIME = "18:00"
-    MAX_TICKETS_PER_USER = 50
+    BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+    ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "8070878424").split(",") if x.strip()]
+    ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "@luckydrawmyanmar")
+    ANNOUNCEMENT_CHANNEL = os.environ.get("ANNOUNCEMENT_CHANNEL", "@luckydrawmyanmarofficial")
+    PAYMENT_LOG_CHANNEL = os.environ.get("PAYMENT_LOG_CHANNEL", "-1002141899845")
+    DAILY_DRAW_TIME = os.environ.get("DAILY_DRAW_TIME", "18:00")
+    MAX_TICKETS_PER_USER = int(os.environ.get("MAX_TICKETS_PER_USER", "50"))
     COMMISSION_RATE = 0.20
     DONATION_RATE = 0.05
     PAYMENT_METHODS = ["KPay", "WavePay"]
@@ -49,25 +54,36 @@ class Config:
 
 class DatabaseManager:
     def __init__(self):
+        self.connection = None
+        self.init_database()
+
+    def init_database(self):
+        """Initialize database with retry logic"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                self.connection = sqlite3.connect('lottery.db', check_same_thread=False, timeout=30)
+                self.connection = sqlite3.connect(
+                    'lottery.db', 
+                    check_same_thread=False, 
+                    timeout=30
+                )
                 self.connection.execute("PRAGMA journal_mode=WAL")
                 self.create_tables()
                 self.create_settings_table()
                 self.create_faq_table()
                 self.create_draw_settings_table()
                 self.create_indexes()
+                
                 logger.info("✅ Database connected successfully")
-                break
+                return
+                
             except Exception as e:
                 logger.error(f"❌ Database connection failed (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
                     time.sleep(2)
                 else:
                     raise
-    
+
     def create_tables(self):
         cursor = self.connection.cursor()
         
@@ -187,7 +203,6 @@ class DatabaseManager:
                 )
             ''')
             
-            # Insert default draw time if not exists
             cursor.execute('INSERT OR IGNORE INTO draw_settings (draw_time, is_active) VALUES (?, ?)', 
                          (Config.DAILY_DRAW_TIME, 1))
             
@@ -291,7 +306,6 @@ class DatabaseManager:
     def is_admin(self, user_id):
         return user_id in Config.ADMIN_IDS
 
-    # Draw time management
     def get_draw_time(self):
         try:
             cursor = self.connection.cursor()
@@ -300,7 +314,6 @@ class DatabaseManager:
             if result:
                 return result[0]
             
-            # Fallback
             cursor.execute('SELECT draw_time FROM draw_settings LIMIT 1')
             result = cursor.fetchone()
             return result[0] if result else Config.DAILY_DRAW_TIME
@@ -319,7 +332,6 @@ class DatabaseManager:
             logger.error(f"Error updating draw time: {e}")
             return False
 
-    # User Management
     def create_user(self, user_id, username, first_name, last_name="", phone=""):
         try:
             cursor = self.connection.cursor()
@@ -352,16 +364,6 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error updating user activity: {e}")
 
-    def get_all_users(self):
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute('SELECT user_id FROM users WHERE status = "active"')
-            return [row[0] for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error(f"Error getting all users: {e}")
-            return []
-
-    # Payment Request Methods
     def create_payment_request(self, user_id, username, first_name, amount, payment_method, transaction_proof=None):
         try:
             transaction_id = f"DEP{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(1000, 9999)}"
@@ -413,20 +415,6 @@ class DatabaseManager:
             logger.error(f"Error getting payment request: {e}")
             return None
 
-    def get_user_payment_requests(self, user_id):
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute('''
-                SELECT * FROM payment_requests 
-                WHERE user_id = ? 
-                ORDER BY created_at DESC
-            ''', (user_id,))
-            return cursor.fetchall()
-        except Exception as e:
-            logger.error(f"Error getting user payment requests: {e}")
-            return []
-
-    # Withdrawal Request Methods
     def create_withdrawal_request(self, user_id, username, first_name, amount, payment_method, account_info):
         try:
             transaction_id = f"WD{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(1000, 9999)}"
@@ -478,20 +466,6 @@ class DatabaseManager:
             logger.error(f"Error getting withdrawal request: {e}")
             return None
 
-    def get_user_withdrawal_requests(self, user_id):
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute('''
-                SELECT * FROM withdrawal_requests 
-                WHERE user_id = ? 
-                ORDER BY created_at DESC
-            ''', (user_id,))
-            return cursor.fetchall()
-        except Exception as e:
-            logger.error(f"Error getting user withdrawal requests: {e}")
-            return []
-
-    # Balance and Transaction Methods
     def update_balance(self, user_id, amount):
         try:
             cursor = self.connection.cursor()
@@ -645,7 +619,6 @@ class LotterySystem:
             except Exception as e:
                 logger.error(f"Admin notification error for {admin_id}: {e}")
 
-    # Payment Request Methods
     async def create_payment_request(self, user_id, username, first_name, amount, payment_method, transaction_proof=None):
         request_id, transaction_id = self.db.create_payment_request(user_id, username, first_name, amount, payment_method, transaction_proof)
         if request_id:
@@ -752,40 +725,6 @@ class LotterySystem:
         
         return True, "Payment rejected successfully"
 
-    async def hold_payment_request(self, request_id, admin_id, admin_note=None):
-        request = self.db.get_payment_request(request_id)
-        if not request:
-            return False, "Request not found"
-        
-        if request[7] != 'pending':
-            return False, "Request already processed"
-        
-        self.db.update_payment_request_status(request_id, 'on_hold', admin_id, admin_note)
-        
-        try:
-            await self.application.bot.send_message(
-                request[1],
-                f"""
-⏸️ **သင့်ငွေသွင်းမှု ဆိုင်းငံ့ထားသည်**
-
-💰 **ပမာဏ:** {request[4]:,.0f} ကျပ်
-📱 **ငွေသွင်းနည်း:** {request[5]}
-🆔 **Request ID:** #{request_id}
-📊 **လုပ်ဆောင်မှုအမှတ်:** `{request[10]}`
-📅 **ဆိုင်းငံ့သည့်အချိန်:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-📝 **အကြောင်းပြချက်:** {admin_note or 'အကြောင်းပြချက်မရှိပါ'}
-
-ကျေးဇူးပြု၍ စောင့်ဆိုင်းပေးပါ။ Admin မှ ဆက်လက်စစ်ဆေးပေးပါမည်။
-
-#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER
-                """
-            )
-        except Exception as e:
-            logger.error(f"Error notifying user: {e}")
-        
-        return True, "Payment put on hold successfully"
-
-    # Withdrawal Request Methods
     async def create_withdrawal_request(self, user_id, username, first_name, amount, payment_method, account_info):
         user = self.db.get_user(user_id)
         if not user or user[5] < amount:
@@ -796,7 +735,6 @@ class LotterySystem:
             self.db.update_balance(user_id, -amount)
             self.db.record_transaction(user_id, 'withdrawal', -amount, f'Withdrawal request - {transaction_id}', 'pending', transaction_id)
             
-            # Get user info for admin notification
             user_phone = user[4] if user[4] else "မှတ်ပုံတင်မထားရှိ"
             user_full_name = f"{user[2]} {user[3]}" if user[3] else user[2]
             
@@ -849,7 +787,6 @@ class LotterySystem:
             f'Withdrawal approved - {request[10]}', 'completed', request[10]
         )
         
-        # Get user info for notification
         user = self.db.get_user(request[1])
         user_phone = user[4] if user[4] else "မှတ်ပုံတင်မထားရှိ"
         user_full_name = f"{user[2]} {user[3]}" if user[3] else user[2]
@@ -902,7 +839,6 @@ class LotterySystem:
             f'Withdrawal rejected - {request[10]}', 'completed', f"REF{request[10]}"
         )
         
-        # Get user info for notification
         user = self.db.get_user(request[1])
         user_phone = user[4] if user[4] else "မှတ်ပုံတင်မထားရှိ"
         user_full_name = f"{user[2]} {user[3]}" if user[3] else user[2]
@@ -938,53 +874,6 @@ class LotterySystem:
             logger.error(f"Error notifying user: {e}")
         
         return True, "Withdrawal rejected successfully"
-
-    async def hold_withdrawal_request(self, request_id, admin_id, admin_note=None):
-        request = self.db.get_withdrawal_request(request_id)
-        if not request:
-            return False, "Request not found"
-        
-        if request[7] != 'pending':
-            return False, "Request already processed"
-        
-        self.db.update_withdrawal_request_status(request_id, 'on_hold', admin_id, admin_note)
-        
-        # Get user info for notification
-        user = self.db.get_user(request[1])
-        user_phone = user[4] if user[4] else "မှတ်ပုံတင်မထားရှိ"
-        user_full_name = f"{user[2]} {user[3]}" if user[3] else user[2]
-        
-        try:
-            await self.application.bot.send_message(
-                request[1],
-                f"""
-⏸️ **သင့်ငွေထုတ်မှု ဆိုင်းငံ့ထားသည်**
-
-👤 **အသုံးပြုသူအချက်အလက်:**
-• **နာမည်:** {user_full_name}
-• **ဖုန်းနံပါတ်:** {user_phone}
-
-💰 **ငွေကြေးအချက်အလက်:**
-• **ထုတ်ယူမည့်ပမာဏ:** {request[4]:,.0f} ကျပ်
-• **ငွေထုတ်နည်း:** {request[5]}
-
-📊 **လုပ်ဆောင်မှုအချက်အလက်:**
-• **Request ID:** #{request_id}
-• **Transaction ID:** `{request[10]}`
-• **ဆိုင်းငံ့သည့်အချိန်:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-• **အကြောင်းပြချက်:** {admin_note or 'အကြောင်းပြချက်မရှိပါ'}
-
-💎 **လက်ရှိလက်ကျန်ငွေ:** {user[5]:,.0f} ကျပ်
-
-ကျေးဇူးပြု၍ စောင့်ဆိုင်းပေးပါ။ Admin မှ ဆက်လက်စစ်ဆေးပေးပါမည်။
-
-#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER
-                """
-            )
-        except Exception as e:
-            logger.error(f"Error notifying user: {e}")
-        
-        return True, "Withdrawal put on hold successfully"
 
     def get_ticket_price(self):
         try:
@@ -1033,7 +922,6 @@ class LotterySystem:
             if balance < total_amount:
                 return f"❌ လက်ကျန်ငွေမလုံလောက်ပါ။\nလက်ရှိလက်ကျန်ငွေ: {balance:,.0f} ကျပ်\nလိုအပ်ငွေ: {total_amount:,.0f} ကျပ်\n\n💳 ငွေသွင်းရန် 'ငွေသွင်းနည်း' ကိုနှိပ်ပါ", 0, 0
             
-            # Return confirmation message instead of buying immediately
             confirmation_text = f"""
 🎫 **ကံစမ်းမဲဝယ်ယူမည် - အတည်ပြုခြင်း**
 
@@ -1060,7 +948,6 @@ class LotterySystem:
         try:
             cursor = self.db.connection.cursor()
             
-            # Deduct balance
             cursor.execute("UPDATE users SET balance = balance - ?, total_spent = total_spent + ?, tickets_bought = tickets_bought + ? WHERE user_id = ?", 
                          (total_amount, total_amount, ticket_count, user_id))
             
@@ -1069,7 +956,6 @@ class LotterySystem:
                 f'Purchased {ticket_count} tickets'
             )
             
-            # Record tickets
             for i in range(ticket_count):
                 cursor.execute("INSERT INTO tickets (user_id, username, amount, purchase_date, status) VALUES (?, ?, ?, datetime('now'), 'active')", 
                              (user_id, username, self.get_ticket_price()))
@@ -1105,24 +991,17 @@ class LotterySystem:
             today = datetime.now().strftime('%Y-%m-%d')
             logger.info(f"🎯 Running daily draw for {today}")
             
-            # Get today's ticket sales
             daily_sales = self.db.get_daily_ticket_sales(today)
             
             if daily_sales > 0:
-                # Select winners and distribute prizes
                 buyers = self.db.get_today_ticket_buyers(today)
                 if buyers:
-                    # Select winners (simplified logic)
                     winner = random.choice(buyers)
-                    prize_amount = daily_sales * 0.75  # 75% of sales as prize
+                    prize_amount = daily_sales * 0.75
                     
-                    # Record winner
                     self.db.record_winner(winner[0], prize_amount, today, f"TICKET_{today}")
-                    
-                    # Update winner's balance
                     self.db.update_balance(winner[0], prize_amount)
                     
-                    # Send announcement
                     announcement = f"""
 🏆 **DAILY LUCKY DRAW RESULTS** 🏆
 
@@ -1143,7 +1022,6 @@ class LotterySystem:
 #LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER
                     """
                     
-                    # Send to announcement channel
                     announcement_channel = self.db.get_setting('announcement_channel', Config.ANNOUNCEMENT_CHANNEL)
                     if announcement_channel:
                         await self.application.bot.send_message(
@@ -1152,7 +1030,6 @@ class LotterySystem:
                             parse_mode='Markdown'
                         )
                     
-                    # Notify winner
                     try:
                         await self.application.bot.send_message(
                             chat_id=winner[0],
@@ -1183,18 +1060,15 @@ class LotterySystem:
 def get_main_menu(user_id=None, db_manager=None):
     is_admin = db_manager.is_admin(user_id) if db_manager and user_id else False
     
-    # Get today's donation and prize pool
     today = datetime.now().strftime('%Y-%m-%d')
     daily_sales = db_manager.get_daily_ticket_sales(today) if db_manager else 0
     today_donation = daily_sales * 0.05
     today_prize_pool = daily_sales * 0.75
     
-    # Get user profile if available
     user_profile = None
     if user_id and db_manager:
         user_profile = db_manager.get_user(user_id)
     
-    # Get current draw time
     draw_time = db_manager.get_draw_time() if db_manager else Config.DAILY_DRAW_TIME
     
     menu_text = f"""
@@ -1221,7 +1095,7 @@ ID                - ????????
     
     menu_text += f"""
 🏆 **ဤယနေ့ ဆုငွေ စုစုပေါင်း** - {today_prize_pool:,.0f} ကျပ်
-⏰ **ကံစမ်း�မဲဖွင့်ချိန်** - {draw_time}
+⏰ **ကံစမ်းမဲဖွင့်ချိန်** - {draw_time}
 
 - နေ့စဉ် ကံထူးရှင်များ ဖြစ်ကြပါစေ 
 
@@ -1231,7 +1105,6 @@ ID                - ????????
     return menu_text
 
 def get_reply_keyboard(user_id=None, db_manager=None):
-    """Create a custom reply keyboard"""
     is_admin = db_manager.is_admin(user_id) if db_manager and user_id else False
     
     keyboard = [
@@ -1288,22 +1161,6 @@ def get_admin_menu():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_payment_confirm_menu():
-    keyboard = [
-        [InlineKeyboardButton("✅ အတည်ပြုရန်", callback_data="confirm_payment")],
-        [InlineKeyboardButton("✏️ ပြန်လည်ပြင်ဆင်ရန်", callback_data="edit_payment")],
-        [InlineKeyboardButton("🔙 မူလ Menu", callback_data="back_main")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def get_withdrawal_confirm_menu():
-    keyboard = [
-        [InlineKeyboardButton("✅ အတည်ပြုရန်", callback_data="confirm_withdrawal")],
-        [InlineKeyboardButton("✏️ ပြန်လည်ပြင်ဆင်ရန်", callback_data="edit_withdrawal")],
-        [InlineKeyboardButton("🔙 မူလ Menu", callback_data="back_main")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
 def get_back_menu():
     keyboard = [
         [InlineKeyboardButton("🔙 မူလ Menu", callback_data="back_main")]
@@ -1312,7 +1169,7 @@ def get_back_menu():
 
 def get_faq_menu():
     keyboard = [
-        [InlineKeyboardButton("1 - အကောင့်ဖွင့်နည်း", callback_data="faq_1"), InlineKeyboardButton("2 - ကံစမ်း�မဲဝယ်နည်း", callback_data="faq_2")],
+        [InlineKeyboardButton("1 - အကောင့်ဖွင့်နည်း", callback_data="faq_1"), InlineKeyboardButton("2 - ကံစမ်းမဲဝယ်နည်း", callback_data="faq_2")],
         [InlineKeyboardButton("3 - ငွေသွင်းနည်း", callback_data="faq_3"), InlineKeyboardButton("4 - အကူအညီ", callback_data="faq_4")],
         [InlineKeyboardButton("🔙 မူလ Menu", callback_data="back_main")]
     ]
@@ -1490,7 +1347,6 @@ async def button_handler(update: Update, context: CallbackContext):
     db_manager = context.bot_data.get('db_manager')
     
     try:
-        # Main navigation
         if data == "back_main":
             menu_text = get_main_menu(user.id, db_manager)
             await query.edit_message_text(
@@ -1500,7 +1356,6 @@ async def button_handler(update: Update, context: CallbackContext):
             )
             return
         
-        # Buy ticket buttons with confirmation
         elif data.startswith("buy_"):
             if data == "buy_1":
                 ticket_count = 1
@@ -1542,7 +1397,6 @@ async def button_handler(update: Update, context: CallbackContext):
                     )
             return
         
-        # Ticket purchase confirmation
         elif data.startswith("confirm_ticket_"):
             if lottery_system and 'pending_ticket_purchase' in context.user_data:
                 purchase_data = context.user_data['pending_ticket_purchase']
@@ -1572,22 +1426,18 @@ async def button_handler(update: Update, context: CallbackContext):
             )
             return
         
-        # Admin draw time setting
         elif data == "set_draw_time":
             if db_manager and db_manager.is_admin(user.id):
                 context.user_data['setting_draw_time'] = True
                 current_time = db_manager.get_draw_time()
                 await query.edit_message_text(
-                    f"⏰ **ကံစမ်းမဲဖွင့်ချိန် ပြင်ဆင်ရန်**\n\nလက်ရှိဖွင့်ချိန်: `{current_time}`\n\nကျေးဇူးပြု၍ အသစ်ပြင်ဆင်လိုသော အချိန်ကို ရိုက်ထည့်ပါ:\n\nဥပမာ: `18:30`\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
+                    f"⏰ **ကံစမ်း�မဲဖွင့်ချိန် ပြင်ဆင်ရန်**\n\nလက်ရှိဖွင့်ချိန်: `{current_time}`\n\nကျေးဇူးပြု၍ အသစ်ပြင်ဆင်လိုသော အချိန်ကို ရိုက်ထည့်ပါ:\n\nဥပမာ: `18:30`\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                     parse_mode='Markdown',
                     reply_markup=get_back_menu()
                 )
             return
         
-        # ... (ကျန်တဲ့ button handler တွေကို မူရင်းအတိုင်းထားခဲ့ပါ) ...
-        
         else:
-            # For other buttons, show coming soon message
             await query.edit_message_text(
                 f"🔘 Button: {data}\n\nThis feature is coming soon!\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                 reply_markup=get_back_menu()
@@ -1608,7 +1458,6 @@ async def handle_text_message(update: Update, context: CallbackContext):
     lottery_system = context.bot_data.get('lottery_system')
     db_manager = context.bot_data.get('db_manager')
     
-    # Handle reply keyboard buttons
     if message_text == "🎫 ကံစမ်းမဲဝယ်ယူရန်":
         await buy_ticket_command(update, context)
         return
@@ -1642,7 +1491,6 @@ async def handle_text_message(update: Update, context: CallbackContext):
         )
         return
     
-    # Handle custom ticket amount
     if 'waiting_for_custom_amount' in context.user_data:
         try:
             ticket_count = int(message_text)
@@ -1693,10 +1541,8 @@ async def handle_text_message(update: Update, context: CallbackContext):
             )
         return
     
-    # Handle draw time setting for admin
     elif 'setting_draw_time' in context.user_data and db_manager and db_manager.is_admin(user.id):
         try:
-            # Validate time format
             import re
             time_pattern = re.compile(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$')
             
@@ -1707,10 +1553,8 @@ async def handle_text_message(update: Update, context: CallbackContext):
                 )
                 return
             
-            # Update draw time
             success = db_manager.update_draw_time(message_text)
             if success:
-                # Restart scheduler with new time
                 lottery_system.setup_daily_draw()
                 
                 await update.message.reply_text(
@@ -1733,7 +1577,6 @@ async def handle_text_message(update: Update, context: CallbackContext):
             )
         return
     
-    # Default response for any other text
     menu_text = get_main_menu(user.id, db_manager)
     await update.message.reply_text(
         menu_text,
@@ -1741,74 +1584,18 @@ async def handle_text_message(update: Update, context: CallbackContext):
         reply_markup=get_reply_keyboard(user.id, db_manager)
     )
 
-# Photo handler for payment screenshots
-async def handle_photo(update: Update, context: CallbackContext):
-    user = update.effective_user
-    db_manager = context.bot_data.get('db_manager')
-    
-    # Check if user is in deposit confirmation step
-    if 'deposit_info' in context.user_data and context.user_data['deposit_info']['step'] == 'confirm':
-        photo = update.message.photo[-1]
-        context.user_data['deposit_info']['screenshot'] = photo.file_id
-        
-        deposit_info = context.user_data['deposit_info']
-        
-        await update.message.reply_text(
-            f"""
-📸 **Screenshot လက်ခံရရှိပါသည်**
-
-💰 **ပမာဏ:** {deposit_info['amount']:,.0f} ကျပ်
-📱 **ငွေသွင်းနည်း:** {deposit_info['method']}
-
-ကျေးဇူးပြု၍ အောက်ပါ Button များကိုနှိပ်ပါ:
-
-#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER
-            """,
-            parse_mode='Markdown',
-            reply_markup=get_payment_confirm_menu()
-        )
-
 # Error handler
 async def error_handler(update: Update, context: CallbackContext):
-    """Handle errors in the bot."""
-    try:
-        logger.error(f"❌ Bot error: {context.error}")
-    except Exception as e:
-        logger.error(f"❌ Error in error handler: {e}")
+    logger.error(f"❌ Bot error: {context.error}")
 
-# Webhook setup for Render
-async def setup_webhook(application):
-    # Get Render external URL from environment
-    render_url = os.environ.get("RENDER_EXTERNAL_URL")
-    if render_url:
-        webhook_url = f"{render_url}/telegram"
-        await application.bot.set_webhook(
-            url=webhook_url,
-            allowed_updates=Update.ALL_TYPES
-        )
-        logger.info(f"✅ Webhook set to: {webhook_url}")
-    else:
-        logger.warning("❌ RENDER_EXTERNAL_URL not set, using polling")
-
-# Starlette web application for Render
-async def telegram_webhook(request: Request):
-    """Handle Telegram webhook requests"""
-    try:
-        application = request.app.state.application
-        data = await request.json()
-        update = Update.de_json(data, application.bot)
-        await application.process_update(update)
-        return Response()
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return Response(status_code=500)
-
-async def health_check(request: Request):
-    """Health check endpoint for Render"""
-    return PlainTextResponse("OK")
-
+# Main function
 async def main():
     """Main function to run the bot"""
+    # Validate configuration
+    if not Config.BOT_TOKEN:
+        logger.error("❌ BOT_TOKEN is required")
+        return
+    
     # Initialize database
     db_manager = DatabaseManager()
     
@@ -1837,28 +1624,12 @@ async def main():
     
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
     application.add_error_handler(error_handler)
     
-    # Check if running on Render
-    if os.environ.get("RENDER"):
-        # Webhook mode for Render
-        await setup_webhook(application)
-        
-        # Create Starlette app
-        starlette_app = Starlette()
-        starlette_app.state.application = application
-        
-        # Add routes
-        starlette_app.router.add_route("/telegram", telegram_webhook, methods=["POST"])
-        starlette_app.router.add_route("/healthcheck", health_check, methods=["GET"])
-        
-        return starlette_app
-    else:
-        # Polling mode for local development
-        logger.info("🤖 Starting bot in polling mode...")
-        await application.run_polling()
+    # Start the bot
+    logger.info("🤖 Starting bot in polling mode...")
+    await application.run_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
