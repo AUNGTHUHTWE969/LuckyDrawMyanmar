@@ -1,13 +1,11 @@
 services:
   - type: web
-    name: lucky-draw-bot
+    name: lucky-draw-myanmar
     env: python
     plan: free
     branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: gunicorn bot:flask_app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 60
     envVars:
       - key: BOT_TOKEN
         value: "8444084929:AAGhso9BSTUkKj8jmrEhKSHmIzg6BvUoYrk"
-      - key: RENDER_EXTERNAL_URL
-        fromGroup: null
