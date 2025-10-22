@@ -1431,7 +1431,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['setting_draw_time'] = True
                 current_time = db_manager.get_draw_time()
                 await query.edit_message_text(
-                    f"⏰ **ကံစမ်းမဲဖွင့်ချိန် ပြင်ဆင်ရန်**\n\nလက်ရှိဖွင့်ချိန်: `{current_time}`\n\nကျေးဇူးပြု၍ အသစ်ပြင်ဆင်လိုသော အချိန်ကို ရိုက်ထည့်ပါ:\n\nဥပမာ: `18:30`\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
+                    f"⏰ **ကံစမ်း�မဲဖွင့်ချိန် ပြင်ဆင်ရန်**\n\nလက်ရှိဖွင့်ချိန်: `{current_time}`\n\nကျေးဇူးပြု၍ အသစ်ပြင်ဆင်လိုသော အချိန်ကို ရိုက်ထည့်ပါ:\n\nဥပမာ: `18:30`\n\n#LUCKYDRAWMYANMAR #ATH #EAGLEDEVELOPER",
                     parse_mode='Markdown',
                     reply_markup=get_back_menu()
                 )
@@ -1599,37 +1599,45 @@ async def main():
     # Initialize database
     db_manager = DatabaseManager()
     
-    # Create Telegram application
-    application = (
-        Application.builder()
-        .token(Config.BOT_TOKEN)
-        .build()
-    )
-    
-    # Store objects in bot_data
-    application.bot_data['db_manager'] = db_manager
-    lottery_system = LotterySystem(db_manager, application)
-    application.bot_data['lottery_system'] = lottery_system
-    
-    # Add handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("buy", buy_ticket_command))
-    application.add_handler(CommandHandler("balance", balance_command))
-    application.add_handler(CommandHandler("deposit", deposit_command))
-    application.add_handler(CommandHandler("withdraw", withdraw_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("profile", profile_command))
-    application.add_handler(CommandHandler("winners", winners_command))
-    application.add_handler(CommandHandler("admin", admin_panel_command))
-    
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    
-    application.add_error_handler(error_handler)
-    
-    # Start the bot
-    logger.info("🤖 Starting bot in polling mode...")
-    await application.run_polling()
+    try:
+        # Create Telegram application
+        application = (
+            Application.builder()
+            .token(Config.BOT_TOKEN)
+            .build()
+        )
+        
+        # Store objects in bot_data
+        application.bot_data['db_manager'] = db_manager
+        lottery_system = LotterySystem(db_manager, application)
+        application.bot_data['lottery_system'] = lottery_system
+        
+        # Add handlers
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("buy", buy_ticket_command))
+        application.add_handler(CommandHandler("balance", balance_command))
+        application.add_handler(CommandHandler("deposit", deposit_command))
+        application.add_handler(CommandHandler("withdraw", withdraw_command))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("profile", profile_command))
+        application.add_handler(CommandHandler("winners", winners_command))
+        application.add_handler(CommandHandler("admin", admin_panel_command))
+        
+        application.add_handler(CallbackQueryHandler(button_handler))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+        
+        application.add_error_handler(error_handler)
+        
+        # Start the bot
+        logger.info("🤖 Starting bot in polling mode...")
+        await application.run_polling()
+        
+    except Exception as e:
+        logger.error(f"❌ Bot startup error: {e}")
+    finally:
+        # Close database connection
+        if db_manager.connection:
+            db_manager.connection.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
