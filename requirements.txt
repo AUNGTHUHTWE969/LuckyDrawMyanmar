@@ -3,4 +3,4 @@ Flask
 gunicorn
 psycopg2-binary
 SQLAlchemy
-python-dotenv  # <--- ဒါကို ထပ်ထည့်ရပါမယ်။
+python-dotenv
