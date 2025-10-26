@@ -12,15 +12,15 @@ from contextlib import contextmanager
 from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 
-# Local Development အတွက် load လုပ်ရန်
+# .env file မှ environment variables များကို load လုပ်ရန် (Local Development အတွက်)
 load_dotenv() 
 
 # --- 1. Configuration & Global State ---
 
-BOT_TOKEN = os.environ.get("8444084929:AAFnXo4U8U3gZAh2C2zeAks0hk3qGstLcNM")
-WEBHOOK_URL = os.environ.get("https://lucky-draw-myanmar.onrender.com")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 try:
-    ADMIN_ID = int(os.environ.get("8070878424", 0))
+    ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
 except ValueError:
     ADMIN_ID = 0
 
@@ -30,9 +30,9 @@ raffle_state = {
     "participants": set() 
 }
 
-# --- 2. Database Setup (unchanged) ---
+# --- 2. Database Setup ---
 
-DB_URL = os.environ.get("https://dashboard.render.com/web/srv-d3rnokmmcj7s73cqc5n0")
+DB_URL = os.environ.get("DATABASE_URL")
 if DB_URL:
     DATABASE_URL = DB_URL.replace("postgres://", "postgresql://", 1)
     engine = create_engine(DATABASE_URL)
@@ -72,7 +72,6 @@ def get_main_keyboard(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
     ]
     
     if is_admin_user:
-        # Admin အတွက် သီးသန့် Button များကို ထည့်သွင်းခြင်း
         keyboard.append([KeyboardButton("/admin_menu")])
         
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
@@ -138,14 +137,13 @@ async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # --- 5. Admin Command Handlers ---
 
 async def admin_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/admin_menu command: Admin Dashboard ကို Reply Keyboard ဖြင့် ပြသခြင်း"""
+    """/admin_menu command: Admin Dashboard ကို Inline Keyboard ဖြင့် ပြသခြင်း"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("🚫 သင့်တွင် Admin အသုံးပြုခွင့်မရှိပါ။")
         return
     
     message = "👑 **Admin လုပ်ဆောင်ချက်များ:**"
     
-    # 💡 Admin အတွက် Inline Keyboard ကို သုံးခြင်း (Action များကို ရှင်းလင်းစေရန်)
     buttons = [
         [InlineKeyboardButton("🎁 ကံစမ်းမဲ အသစ် စတင်ရန်", callback_data='admin_create_raffle_prompt')],
         [InlineKeyboardButton("🗳️ ကံထူးရှင် ရွေးရန်", callback_data='admin_pick_winner')]
@@ -155,7 +153,7 @@ async def admin_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
 
 async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/create_raffle command ကိုင်တွယ်ခြင်း (Admin မှသာ message ပို့ရန်)"""
+    """/create_raffle command ကိုင်တွယ်ခြင်း"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("🚫 သင့်တွင် Admin အသုံးပြုခွင့်မရှိပါ။")
         return
@@ -176,7 +174,6 @@ async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TY
     raffle_state["prize"] = prize
     raffle_state["participants"].clear()
 
-    # 💡 UI: Join Button ပါသော ကြေညာစာသားကို အားလုံးမြင်နိုင်ရန် ပို့ပေးခြင်း
     message = (
         f"🎉 **ကံစမ်းမဲ စတင်ပါပြီ!** 🎉\n\n"
         f"🎁 **ဆု:** {prize}\n"
@@ -185,7 +182,7 @@ async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TY
     )
     
     await context.bot.send_message(
-        chat_id=update.effective_chat.id, # Message ပို့တဲ့ Chat မှာပဲ ပြပါမယ်။
+        chat_id=update.effective_chat.id, 
         text=message, 
         reply_markup=get_join_inline_keyboard(), 
         parse_mode="Markdown"
@@ -204,13 +201,11 @@ async def handle_admin_actions(update: Update, context: ContextTypes.DEFAULT_TYP
     data = query.data
     
     if data == 'admin_create_raffle_prompt':
-        # Admin ကို command ရိုက်ဖို့ ပြောခြင်း
         await query.edit_message_text(
             "📝 **ဆုကို ရိုက်ထည့်ပါ:**\n\n"
             "ကျေးဇူးပြု၍ **`/create_raffle [ဆုအမည်]`** ပုံစံဖြင့် ရိုက်ထည့်ပေးပါ။"
         )
     elif data == 'admin_pick_winner':
-        # ကံထူးရှင် ရွေးချယ်ခြင်းကို တိုက်ရိုက်ခေါ်ခြင်း
         await query.edit_message_text("စနစ်မှ ကံထူးရှင် ရွေးချယ်နေပါသည်။...")
         await pick_winner_handler(update, context, is_callback=True)
 
@@ -225,7 +220,6 @@ async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     user_id = query.from_user.id
     
-    # Register စစ်ဆေး
     with get_db() as db:
         if not db.query(User).filter(User.id == user_id).first():
             await query.answer("🛑 ကံစမ်းမဲမပါဝင်မီ /register ဖြင့် မှတ်ပုံတင်ရန် လိုအပ်ပါသည်။", show_alert=True)
@@ -236,7 +230,6 @@ async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         raffle_state["participants"].add(user_id)
         
-        # 💡 UX: Message ကို update လုပ်ပြီး ပါဝင်သူအရေအတွက်ကို ပြောင်းလဲပြခြင်း
         new_text = (
             f"🎉 **ကံစမ်းမဲ စတင်ပါပြီ!** 🎉\n\n"
             f"🎁 **ဆု:** {raffle_state['prize']}\n"
@@ -246,7 +239,7 @@ async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         await query.edit_message_text(
             new_text, 
-            reply_markup=get_join_inline_keyboard(), # Button ကို ပြန်ထည့်ပေးရန်
+            reply_markup=get_join_inline_keyboard(), 
             parse_mode="Markdown"
         )
         await query.answer("✨ ပါဝင်ခြင်း အောင်မြင်ပါသည်။ ကံကောင်းပါစေ!", show_alert=True)
@@ -255,15 +248,16 @@ async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False) -> None:
     """ကံထူးရှင် ရွေးချယ်ခြင်း"""
     
-    # (Existing pick_winner logic... စာရှည်မှာစိုးလို့ အပေါ်က code အတိုင်း ထားခဲ့ပါ)
     user_id = update.effective_user.id if not is_callback else update.callback_query.from_user.id
 
     if not is_admin(user_id):
-        # ... Admin check 
         return
 
     if not raffle_state["is_active"]:
-        # ... Raffle active check
+        if is_callback:
+             await update.callback_query.edit_message_text("❌ ကံစမ်းမဲ မစတင်ရသေးပါ။")
+        else:
+             await update.message.reply_text("❌ ကံစမ်းမဲ မစတင်ရသေးပါ။")
         return
 
     participants = list(raffle_state["participants"])
@@ -301,8 +295,6 @@ application = Application.builder().token(BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("register", register_command))
 application.add_handler(CommandHandler("current_raffle", current_raffle_command))
-
-# Admin Command များ
 application.add_handler(CommandHandler("admin_menu", admin_menu_command))
 application.add_handler(CommandHandler("create_raffle", create_raffle_command))
 application.add_handler(CommandHandler("pick_winner", pick_winner_handler))
@@ -329,6 +321,7 @@ async def webhook_handler():
 
 async def set_webhook_on_start():
     if BOT_TOKEN and WEBHOOK_URL:
+        # WEBHOOK_URL ကို Render မှာ https://lucky-draw-myanmar.onrender.com/ လိုမျိုး ထည့်ပေးရပါမယ်။
         await application.bot.set_webhook(url=f"{WEBHOOK_URL}{BOT_TOKEN}")
 
 if BOT_TOKEN and WEBHOOK_URL:
