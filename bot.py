@@ -20,7 +20,7 @@ load_dotenv()
 # 🚨 Hardcoded အချက်အလက်များကို အသုံးပြုခြင်း 🚨
 BOT_TOKEN = "8444084929:AAFnXo4U8U3gZAh2C2zeAks0hk3qGstLcNM"
 ADMIN_ID = 8070878424
-WEBHOOK_URL = "https://lucky-draw-myanmar.onrender.com" # <--- သတ်မှတ်ထားသော URL
+WEBHOOK_URL = "https://lucky-draw-myanmar.onrender.com" 
 
 raffle_state = {
     "is_active": False,
@@ -30,7 +30,7 @@ raffle_state = {
 
 # --- 2. Database Setup ---
 
-# DATABASE_URL ကို Render Environment Variable မှ ဆက်လက်ယူသုံးပါမည်။
+# DATABASE_URL ကို Render Environment Variable မှ ယူသုံးပါမည်။
 DB_URL = os.environ.get("DATABASE_URL")
 if DB_URL:
     # Render DB URL ကို SQLAlchemy အတွက် မှန်ကန်သော ပုံစံသို့ ပြောင်းလဲခြင်း
@@ -323,27 +323,15 @@ flask_app = Flask(__name__)
 def home():
     return "Bot is running!", 200
 
-# BOT_TOKEN ကို Hardcode လုပ်ထားခြင်းကြောင့် URL လည်း မှန်ကန်စွာ ရရှိမည်
+# Webhook Handler
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
 async def webhook_handler(): 
     if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), application.bot)
-        # Flask[async] ကို ထည့်သွင်းပြီးပြီဖြစ်၍ async ကို သုံးနိုင်သည်။
         asyncio.create_task(application.process_update(update)) 
     return jsonify({'status': 'ok'})
 
-# Webhook URL ကို API တွင် မှန်ကန်စွာ set လုပ်ခြင်း
-async def set_webhook_on_start():
-    if BOT_TOKEN and WEBHOOK_URL:
-        # URL နဲ့ Token ကို မှန်ကန်စွာ ပေါင်းစပ်ပေးခြင်း
-        await application.bot.set_webhook(url=f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}") 
-
-if BOT_TOKEN and WEBHOOK_URL:
-    try:
-        asyncio.run(set_webhook_on_start())
-    except Exception as e:
-        # Webhook set လုပ်ရာတွင် ပြဿနာတက်သော်လည်း Deploy သည် ဆက်လက်သွားမည်။
-        print(f"Error setting webhook: {e}") 
+# 🛑 Webhook set လုပ်တဲ့ code ကို ဖြုတ်လိုက်ပါပြီ။ Manual set လုပ်ပြီးသားဖြစ်လို့ ဒီနေရာမှာ Error တက်စရာမလိုတော့ပါ။
 
 if __name__ == '__main__':
     # Render မှာ gunicorn ကို Start Command မှာ သုံးထားသည်။
