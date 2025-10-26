@@ -323,15 +323,21 @@ flask_app = Flask(__name__)
 def home():
     return "Bot is running!", 200
 
-# Webhook Handler
+# Webhook Handler (FIXED)
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
 async def webhook_handler(): 
     if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), application.bot)
+        
+        # 🚨 FIX: Application ကို initialize လုပ်ပေးခြင်း 🚨
+        if not application.updater and not application.job_queue:
+            # initialize() ကို တစ်ခါပဲ ခေါ်ဖို့ လိုပါတယ်။
+            await application.initialize() 
+            
         asyncio.create_task(application.process_update(update)) 
     return jsonify({'status': 'ok'})
 
-# 🛑 Webhook set လုပ်တဲ့ code ကို ဖြုတ်လိုက်ပါပြီ။ Manual set လုပ်ပြီးသားဖြစ်လို့ ဒီနေရာမှာ Error တက်စရာမလိုတော့ပါ။
+# Webhook set လုပ်တဲ့ code ကို ဖြုတ်လိုက်ပါပြီ။ Manual set လုပ်ပြီးသားဖြစ်လို့ ဒီနေရာမှာ Error တက်စရာမလိုတော့ပါ။
 
 if __name__ == '__main__':
     # Render မှာ gunicorn ကို Start Command မှာ သုံးထားသည်။
