@@ -3,7 +3,8 @@ import random
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, CallbackQueryHandler
+    Application, CommandHandler, ContextTypes, CallbackQueryHandler,
+    async_to_sync  # 🚨 FIX: New Import 🚨
 )
 from flask import Flask, request, jsonify
 from sqlalchemy import create_engine, Column, Integer, String
@@ -297,7 +298,7 @@ async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(message, parse_mode="Markdown")
 
 
-# --- 7. Application Setup & Webhook ---
+# --- 7. Application Setup & Webhook (FINAL CRITICAL FIX) ---
 
 # Hardcoded BOT_TOKEN ကို သုံးခြင်း
 application = Application.builder().token(BOT_TOKEN).build()
@@ -319,42 +320,32 @@ application.add_handler(CallbackQueryHandler(handle_admin_actions, pattern='^adm
 # Flask Web Server & Webhook 
 flask_app = Flask(__name__)
 
-# Helper function for synchronous Flask handler to run async code
-def process_update_sync(json_data):
-    """Async Application Process ကို Sync Function ထဲကနေ Run ပေးဖို့ Helper"""
-    async def process():
-        try:
-            update = Update.de_json(json_data, application.bot)
-        except Exception as e:
-            print(f"Error parsing JSON data in sync helper: {e}")
-            return # JSON error ဖြစ်ရင် ရပ်
-        
-        # 🚨 FINAL LOG FIX: Initialization အောင်မြင်ကြောင်း စာထုတ်ခြင်း 🚨
-        # Worker တိုင်းက ပထမဆုံး Request ဝင်လာချိန်မှာ Initialize လုပ်စေခြင်း
-        if not application.updater and not application.job_queue:
-            await application.initialize() 
-            print("INFO: Bot Initialized!") # <--- 🚨 Log Message အသစ် 🚨
-            
-        await application.process_update(update) 
-        
-    # Thread ကို Block မဖြစ်စေဘဲ Update ကို Run နိုင်ဖို့ ချက်ချင်း Execute လုပ်ခြင်း
-    asyncio.run(process())
-
+# 🚨 FIX: process_update_sync function ကို ဖယ်ရှားလိုက်ပြီ 🚨
 
 @flask_app.route('/')
 def home():
     return "Bot is running!", 200
 
-# Webhook Handler
+# Webhook Handler (FINAL CRITICAL FIX - Using async_to_sync)
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
 def webhook_handler(): 
     if request.method == "POST":
-        # Flask ရဲ့ request.get_json ကို await မပါဘဲ တိုက်ရိုက်သုံးခြင်း
         try:
-            json_data = request.get_json(force=True) 
-            process_update_sync(json_data) 
+            json_data = request.get_json(force=True)
+            
+            # 🚨 FIX 1: Initialization ကို async_to_sync ဖြင့် Worker တိုင်းမှာ အချိန်မီ လုပ်စေခြင်း 🚨
+            # ဒါမှသာ Initialization က Blocking မဖြစ်တော့ဘဲ Gunicorn ရဲ့ Loop Lock ကို ဖြေရှင်းပေးနိုင်ပါလိမ့်မယ်။
+            if not application.updater and not application.job_queue:
+                async_to_sync(application.initialize())
+                print("INFO: Bot Initialized!") 
+            
+            # 🚨 FIX 2: Update ကို Non-Blocking ဖြစ်စေသော async_to_sync ဖြင့် Process လုပ်ခြင်း 🚨
+            async_to_sync(application.process_update(
+                Update.de_json(json_data, application.bot)
+            ))
+            
         except Exception as e:
-            # Error တက်ရင်တောင် Telegram ကို 500 မပြန်ဘဲ 200 OK ပြန်ပေးပါ
+            # Update.de_json error or general error
             print(f"CRITICAL ERROR in Flask Handler: {e}")
             return jsonify({'status': 'CRITICAL ERROR'}), 200 
             
