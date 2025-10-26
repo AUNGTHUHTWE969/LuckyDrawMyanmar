@@ -13,17 +13,14 @@ from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 
 # .env file မှ environment variables များကို load လုပ်ရန် (Local Development အတွက်)
-# Render တွင် run လျှင် ၎င်းကို ကျော်သွားမည်။
 load_dotenv() 
 
 # --- 1. Configuration & Global State ---
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-try:
-    ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
-except ValueError:
-    ADMIN_ID = 0
+# 🚨 Hardcoded အချက်အလက်များကို အသုံးပြုခြင်း 🚨
+BOT_TOKEN = "8444084929:AAFnXo4U8U3gZAh2C2zeAks0hk3qGstLcNM"
+ADMIN_ID = 8070878424
+WEBHOOK_URL = "https://lucky-draw-myanmar.onrender.com" # <--- သတ်မှတ်ထားသော URL
 
 raffle_state = {
     "is_active": False,
@@ -33,6 +30,7 @@ raffle_state = {
 
 # --- 2. Database Setup ---
 
+# DATABASE_URL ကို Render Environment Variable မှ ဆက်လက်ယူသုံးပါမည်။
 DB_URL = os.environ.get("DATABASE_URL")
 if DB_URL:
     # Render DB URL ကို SQLAlchemy အတွက် မှန်ကန်သော ပုံစံသို့ ပြောင်းလဲခြင်း
@@ -301,6 +299,7 @@ async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # --- 7. Application Setup & Webhook ---
 
+# Hardcoded BOT_TOKEN ကို သုံးခြင်း
 application = Application.builder().token(BOT_TOKEN).build()
 
 # Command Handlers (Dashboard Command များ)
@@ -324,18 +323,19 @@ flask_app = Flask(__name__)
 def home():
     return "Bot is running!", 200
 
-@flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
+# BOT_TOKEN ကို Hardcode လုပ်ထားခြင်းကြောင့် URL လည်း မှန်ကန်စွာ ရရှိမည်
+@flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
 async def webhook_handler():
     if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), application.bot)
         asyncio.create_task(application.process_update(update))
     return jsonify({'status': 'ok'})
 
-# 💡 Webhook URL ပြဿနာကို ဖြေရှင်းထားသော function
+# Webhook URL ပြဿနာကို ဖြေရှင်းထားသော function
 async def set_webhook_on_start():
+    # Hardcoded WEBHOOK_URL ကို သုံးခြင်း
     if BOT_TOKEN and WEBHOOK_URL:
-        # .rstrip('/') ဖြင့် WEBHOOK_URL ရဲ့ နောက်ဆုံးက / ကို ဖြုတ်ပြီးမှ BOT_TOKEN ကို / နဲ့ တွဲပေးလိုက်ခြင်းဖြင့် 
-        # Invalid URL Error ကို ဖြေရှင်းပေးသည်။
+        # URL နဲ့ Token ကို မှန်ကန်စွာ ပေါင်းစပ်ပေးခြင်း
         await application.bot.set_webhook(url=f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}") 
 
 if BOT_TOKEN and WEBHOOK_URL:
@@ -345,8 +345,6 @@ if BOT_TOKEN and WEBHOOK_URL:
         # Deploy Log တွင် Webhook Error ကို မြင်ရသော်လည်း Bot သည် အလုပ်လုပ်နိုင်သည်။
         print(f"Error setting webhook: {e}") 
 
-# 💡 Render မှာ Run ရန်
 if __name__ == '__main__':
-    # gunicorn ကို Start Command မှာ သုံးထား၍ ဤအပိုင်းသည် အရေးမကြီးတော့ပါ။
-    # Development အတွက်သာ သုံးသည်။
+    # Render မှာ gunicorn ကို Start Command မှာ သုံးထားသည်။
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
