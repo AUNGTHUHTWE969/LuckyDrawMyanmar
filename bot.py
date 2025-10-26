@@ -1,486 +1,214 @@
 import os
-import logging
-from flask import Flask, request
-from telegram import Update, Bot
+import random
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-import sqlite3
-from dotenv import load_dotenv
+from flask import Flask, request, jsonify
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.orm import sessionmaker, declarative_base
+from contextlib import contextmanager
+from sqlalchemy.exc import IntegrityError # DB Error ကို စစ်ရန်
 
-# Load environment variables
-load_dotenv()
+# --- 1. Configuration & Global State ---
 
-app = Flask(__name__)
+# Bot Token နှင့် Admin ID ကို Environment Variables မှ ယူခြင်း
+BOT_TOKEN = os.environ.get("8444084929:AAFnXo4U8U3gZAh2C2zeAks0hk3qGstLcNM")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+# Admin ID ကို String အနေနဲ့ ယူပြီး Integer အဖြစ် ပြောင်းပါမည်
+ADMIN_ID = int(os.environ.get("8070878424", 0)) 
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Raffle State (Temporary - DB ဖြင့် အစားထိုးနိုင်သည်)
+raffle_state = {
+    "is_active": False,
+    "prize": None,
+    "participants": set()
+}
 
-class LuckyDrawBot:
-    def __init__(self):
-        self.token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.webhook_url = os.getenv('WEBHOOK_URL')
-        self.application = Application.builder().token(self.token).build()
-        self.setup_handlers()
-        self.init_database()
+# --- 2. Database Setup (Populated with prior code) ---
+
+DATABASE_URL = os.environ.get("DATABASE_URL").replace("postgres://", "postgresql://", 1)
+
+Base = declarative_base()
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True) 
+    username = Column(String, index=True)
+    full_name = Column(String)
     
-    def init_database(self):
-        """Initialize SQLite database"""
-        conn = sqlite3.connect('luckydraw.db')
-        cursor = conn.cursor()
-        
-        # Users table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER UNIQUE,
-                username TEXT,
-                full_name TEXT,
-                phone TEXT,
-                registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Draw events table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS draw_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                prize TEXT,
-                winner_count INTEGER DEFAULT 1,
-                status TEXT DEFAULT 'active',
-                created_by INTEGER,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                draw_date DATETIME
-            )
-        ''')
-        
-        # Participants table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS participants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                draw_id INTEGER,
-                user_id INTEGER,
-                joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (draw_id) REFERENCES draw_events (id),
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        # Winners table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS winners (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                draw_id INTEGER,
-                user_id INTEGER,
-                won_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (draw_id) REFERENCES draw_events (id),
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-        logging.info("Database initialized successfully")
-    
-    def setup_handlers(self):
-        """Setup bot command handlers"""
-        self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CommandHandler("help", self.help))
-        self.application.add_handler(CommandHandler("register", self.register))
-        self.application.add_handler(CommandHandler("create_draw", self.create_draw))
-        self.application.add_handler(CommandHandler("list_draws", self.list_draws))
-        self.application.add_handler(CommandHandler("join_draw", self.join_draw))
-        self.application.add_handler(CommandHandler("draw_winner", self.draw_winner))
-        self.application.add_handler(CommandHandler("my_tickets", self.my_tickets))
-    
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        welcome_text = f"""
-🧧 ကြိုဆိုပါတယ် {user.mention_html()}!
+Base.metadata.create_all(bind=engine)
 
-Lucky Draw Myanmar Bot မှ နေပြီး ဆုကြေးပွဲများ ဝင်ရောက်ယူနိုင်ပါတယ်။
+@contextmanager
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-အသုံးပြုနည်းများ:
-/register - စာရင်းသွင်းရန်
-/create_draw - ဆွဲကံပွဲအသစ်ဖန်တီးရန်
-/list_draws - ဆွဲကံပွဲများ ကြည့်ရန်
-/join_draw - ဆွဲကံပွဲတွင်ပါဝင်ရန်
-/my_tickets - ကိုယ့်တီကတ်များ ကြည့်ရန်
-/draw_winner - ဆုရှင်ဆွဲရန် (Admin)
-        """
-        await update.message.reply_html(welcome_text)
+# --- 3. Helper Function (Admin Check) ---
+
+def is_admin(user_id: int) -> bool:
+    """လက်ရှိ user သည် admin ဟုတ်/မဟုတ် စစ်ဆေးခြင်း"""
+    return user_id == ADMIN_ID
+
+# --- 4. Command Handlers (Modified) ---
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/start command ကို ဖြေကြားခြင်း။"""
+    await update.message.reply_text("👋 ကံစမ်းမဲ Bot မှ ကြိုဆိုပါသည်။ ပါဝင်ရန် /register နှင့် /join_raffle ကို နှိပ်ပါ။")
+
+async def register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/register command ဖြင့် User ကို Database တွင် မှတ်ပုံတင်ခြင်း"""
     
-    async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        help_text = """
-📖 အကူအညီများ:
-
-1. ပထမဆုံး /register ဖြင့် စာရင်းသွင်းပါ
-2. /list_draws ဖြင့် ရှိပြီးသား ပွဲများကို ကြည့်ပါ
-3. /join_draw <ပွဲနံပါတ်> ဖြင့် ဝင်ရောက်ယူပါ
-4. Admin များအနေဖြင့် /create_draw ဖြင့် ပွဲအသစ်ဖန်တီးနိုင်ပါတယ်
-
-ဥပမာ:
-/join_draw 1
-        """
-        await update.message.reply_text(help_text)
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "N/A"
+    full_name = update.effective_user.full_name
     
-    async def register(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        conn = sqlite3.connect('luckydraw.db')
-        cursor = conn.cursor()
-        
+    with get_db() as db:
         try:
-            cursor.execute(
-                'INSERT OR IGNORE INTO users (telegram_id, username, full_name) VALUES (?, ?, ?)',
-                (user.id, user.username, user.full_name)
-            )
-            conn.commit()
-            
-            if cursor.rowcount > 0:
-                await update.message.reply_text("✅ စာရင်းသွင်းမှု အောင်မြင်ပါသည်!")
-            else:
-                await update.message.reply_text("ℹ️  သင့်အား စာရင်းသွင်းပြီးသားဖြစ်ပါသည်။")
-                
-        except Exception as e:
-            logging.error(f"Registration error: {e}")
-            await update.message.reply_text("❌ စာရင်းသွင်းရာတွင် အမှားတစ်ခုဖြစ်နေပါသည်။")
-        
-        finally:
-            conn.close()
+            new_user = User(id=user_id, username=username, full_name=full_name)
+            db.add(new_user)
+            db.commit()
+            db.refresh(new_user)
+            await update.message.reply_text(f"🎉 **{full_name}** မှတ်ပုံတင်ခြင်း အောင်မြင်ပါသည်။")
+        except IntegrityError:
+            # Primary Key Error (User ID) ကြောင့် Register ထပ်လုပ်လို့မရရင်
+            db.rollback() 
+            await update.message.reply_text("✅ သင်သည် မှတ်ပုံတင်ပြီးသား ဖြစ်ပါသည်။")
+
+async def create_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """(ADMIN ONLY) ကံစမ်းမဲ အသစ်တစ်ခု စတင်ခြင်း။"""
     
-    async def create_draw(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Check if user is admin
-        user = update.effective_user
-        if str(user.id) not in os.getenv('ADMIN_IDS', '').split(','):
-            await update.message.reply_text("❌ ဤအမိန့်ကို အသုံးပြုခွင့် မရှိပါ။")
+    # --- ADMIN CHECK ---
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 သင့်တွင် အသုံးပြုခွင့်မရှိပါ။")
+        return
+    # -------------------
+    
+    if raffle_state["is_active"]:
+        await update.message.reply_text("⚠️ ကံစမ်းမဲတစ်ခု လည်ပတ်နေဆဲဖြစ်ပါသည်။ /pick_winner ဖြင့် အရင်ပိတ်ပါ။")
+        return
+
+    try:
+        prize = " ".join(context.args) # Command နောက်က စာအားလုံးကို ဆုအဖြစ်ယူမည်
+        if not prize:
+             raise IndexError
+    except IndexError:
+        await update.message.reply_text("❌ ကျေးဇူးပြု၍ ဆုကို ထည့်သွင်းပါ။ ဥပမာ: /create_raffle ဆိုင်ကယ်")
+        return
+
+    raffle_state["is_active"] = True
+    raffle_state["prize"] = prize
+    raffle_state["participants"].clear()
+
+    message = (
+        f"🎉 **ကံစမ်းမဲ စတင်ပါပြီ!** 🎉\n\n"
+        f"🎁 **ဆု:** {prize}\n"
+        f"ပါဝင်လိုပါက /join_raffle ကို နှိပ်ပါ။"
+    )
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+
+async def join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """ကံစမ်းမဲသို့ ပါဝင်ခြင်း။"""
+    if not raffle_state["is_active"]:
+        await update.message.reply_text("❌ လက်ရှိ လည်ပတ်နေသော ကံစမ်းမဲ မရှိပါ။")
+        return
+    
+    user_id = update.effective_user.id
+    username = update.effective_user.full_name
+
+    # DB မှာ Register လုပ်ပြီးသားလား အရင်စစ်ဆေးသင့်ပါသည်။
+    with get_db() as db:
+        if not db.query(User).filter(User.id == user_id).first():
+            await update.message.reply_text("🛑 ကံစမ်းမဲမပါဝင်မီ /register ဖြင့် မှတ်ပုံတင်ရန် လိုအပ်ပါသည်။")
             return
-        
-        if len(context.args) < 3:
-            await update.message.reply_text("""
-📝 ပွဲဖန်တီးရန် format:
-/create_draw <ပွဲအမည်> <ဆုကြေး> <ဆုရှင်အရေအတွက်>
 
-ဥပမာ:
-/create_draw "နှစ်သစ်ဆုကြေးပွဲ" "ငွေကျပ် ၁၀၀၀၀၀" 3
-            """)
-            return
-        
-        draw_name = context.args[0]
-        prize = context.args[1]
-        winner_count = int(context.args[2])
-        
-        conn = sqlite3.connect('luckydraw.db')
-        cursor = conn.cursor()
-        
-        try:
-            cursor.execute(
-                'INSERT INTO draw_events (name, prize, winner_count, created_by) VALUES (?, ?, ?, ?)',
-                (draw_name, prize, winner_count, user.id)
-            )
-            conn.commit()
-            draw_id = cursor.lastrowid
-            
-            await update.message.reply_text(f"""
-✅ ဆွဲကံပွဲအသစ် ဖန်တီးပြီးပါပြီ!
+    if user_id in raffle_state["participants"]:
+        await update.message.reply_text("✅ သင် ပါဝင်ပြီးသား ဖြစ်ပါသည်။")
+    else:
+        raffle_state["participants"].add(user_id)
+        await update.message.reply_text(f"✨ **{username}** ကံစမ်းမဲတွင် ပါဝင်လိုက်ပါပြီ! စုစုပေါင်း: {len(raffle_state['participants'])} ဦး")
 
-ပွဲအမည်: {draw_name}
-ဆုကြေး: {prize}
-ဆုရှင်အရေ: {winner_count} ဦး
-ပွဲအမှတ်: {draw_id}
 
-အခြားသူများ ဝင်ရောက်ရန်:
-/join_draw {draw_id}
-            """)
-            
-        except Exception as e:
-            logging.error(f"Create draw error: {e}")
-            await update.message.reply_text("❌ ပွဲဖန်တီးရာတွင် အမှားတစ်ခုဖြစ်နေပါသည်။")
-        
-        finally:
-            conn.close()
+async def pick_winner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """(ADMIN ONLY) ကံထူးရှင် ရွေးချယ်ခြင်း။"""
     
-    async def list_draws(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        conn = sqlite3.connect('luckydraw.db')
-        cursor = conn.cursor()
+    # --- ADMIN CHECK ---
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 သင့်တွင် အသုံးပြုခွင့်မရှိပါ။")
+        return
+    # -------------------
+
+    if not raffle_state["is_active"]:
+        await update.message.reply_text("❌ ကံစမ်းမဲ မစတင်ရသေးပါ။")
+        return
+
+    participants = list(raffle_state["participants"])
+
+    if len(participants) == 0:
+        await update.message.reply_text("😢 ပါဝင်သူ မရှိ၍ ကံထူးရှင် ရွေးချယ်နိုင်ခြင်း မရှိပါ။")
+    else:
+        winner_id = random.choice(participants)
         
-        try:
-            cursor.execute('''
-                SELECT id, name, prize, winner_count, status 
-                FROM draw_events 
-                WHERE status = 'active'
-                ORDER BY created_at DESC
-            ''')
-            draws = cursor.fetchall()
-            
-            if not draws:
-                await update.message.reply_text("ℹ️  လက်ရှိတွင် ဆွဲကံပွဲမရှိပါ။")
-                return
-            
-            draws_text = "🎯 လက်ရှိဆွဲကံပွဲများ:\n\n"
-            for draw in draws:
-                draw_id, name, prize, winner_count, status = draw
-                draws_text += f"""
-#{draw_id} - {name}
-ဆုကြေး: {prize}
-ဆုရှင်: {winner_count} ဦး
-ဝင်ရောက်ရန်: /join_draw {draw_id}
-────────────────────
-                """
-            
-            await update.message.reply_text(draws_text)
-            
-        except Exception as e:
-            logging.error(f"List draws error: {e}")
-            await update.message.reply_text("❌ ပွဲစာရင်းရယူရာတွင် အမှားတစ်ခုဖြစ်နေပါသည်။")
+        # Database မှ ကံထူးရှင် အချက်အလက် ရယူခြင်း
+        with get_db() as db:
+            winner_user = db.query(User).filter(User.id == winner_id).first()
+            winner_name = winner_user.full_name if winner_user else "တစ်စုံတစ်ယောက် (အမည် မသိ)"
         
-        finally:
-            conn.close()
-    
-    async def join_draw(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args:
-            await update.message.reply_text("""
-🎫 ပွဲဝင်ရန်:
-/join_draw <ပွဲအမှတ်>
+        message = (
+            f"👑 **ကံထူးရှင် ရွေးချယ်ခြင်း ပြီးဆုံးပါပြီ!** 👑\n\n"
+            f"🎉 **ကံထူးရှင်:** {winner_name} (ID: {winner_id})\n"
+            f"🎁 **ဆု:** {raffle_state['prize']}"
+        )
+        await update.message.reply_text(message, parse_mode="Markdown")
 
-ဥပမာ:
-/join_draw 1
-            """)
-            return
-        
-        try:
-            draw_id = int(context.args[0])
-            user = update.effective_user
-            
-            conn = sqlite3.connect('luckydraw.db')
-            cursor = conn.cursor()
-            
-            # Check if user is registered
-            cursor.execute('SELECT id FROM users WHERE telegram_id = ?', (user.id,))
-            user_record = cursor.fetchone()
-            
-            if not user_record:
-                await update.message.reply_text("❌ ကျေးဇူးပြု၍ ပထမဆုံး /register ဖြင့် စာရင်းသွင်းပါ။")
-                return
-            
-            user_id = user_record[0]
-            
-            # Check if draw exists and is active
-            cursor.execute('SELECT name, status FROM draw_events WHERE id = ?', (draw_id,))
-            draw = cursor.fetchone()
-            
-            if not draw:
-                await update.message.reply_text("❌ ပွဲအမှတ် မှားယွင်းနေပါသည်။")
-                return
-            
-            draw_name, status = draw
-            if status != 'active':
-                await update.message.reply_text("❌ ဤဆွဲကံပွဲ ပြီးဆုံးသွားပါပြီ။")
-                return
-            
-            # Check if already joined
-            cursor.execute(
-                'SELECT id FROM participants WHERE draw_id = ? AND user_id = ?',
-                (draw_id, user_id)
-            )
-            if cursor.fetchone():
-                await update.message.reply_text("ℹ️  သင် ဤပွဲသို့ ဝင်ရောက်ပြီးသားဖြစ်ပါသည်။")
-                return
-            
-            # Join the draw
-            cursor.execute(
-                'INSERT INTO participants (draw_id, user_id) VALUES (?, ?)',
-                (draw_id, user_id)
-            )
-            conn.commit()
-            
-            await update.message.reply_text(f"""
-✅ ဆွဲကံပွဲသို့ အောင်မြင်စွာ ဝင်ရောက်ပြီးပါပြီ!
+    # ကံစမ်းမဲ အခြေအနေကို ပြန်လည် စတင်ပါ။
+    raffle_state["is_active"] = False
+    raffle_state["prize"] = None
+    raffle_state["participants"].clear()
 
-ပွဲအမည်: {draw_name}
-ပွဲအမှတ်: {draw_id}
 
-ကံကောင်းနိုင်စရာများ ကျေးဇူးတင်ပါတယ်! 🍀
-            """)
-            
-        except ValueError:
-            await update.message.reply_text("❌ ပွဲအမှတ်သည် နံပါတ်တစ်ခုဖြစ်ရပါမည်။")
-        except Exception as e:
-            logging.error(f"Join draw error: {e}")
-            await update.message.reply_text("❌ ပွဲဝင်ရာတွင် အမှားတစ်ခုဖြစ်နေပါသည်။")
-        finally:
-            conn.close()
-    
-    async def draw_winner(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        if str(user.id) not in os.getenv('ADMIN_IDS', '').split(','):
-            await update.message.reply_text("❌ ဤအမိန့်ကို အသုံးပြုခွင့် မရှိပါ။")
-            return
-        
-        if not context.args:
-            await update.message.reply_text("""
-🏆 ဆုရှင်ဆွဲရန်:
-/draw_winner <ပွဲအမှတ်>
+# --- 5. Application Setup & Webhook (unchanged) ---
 
-ဥပမာ:
-/draw_winner 1
-            """)
-            return
-        
-        try:
-            draw_id = int(context.args[0])
-            conn = sqlite3.connect('luckydraw.db')
-            cursor = conn.cursor()
-            
-            # Get draw info
-            cursor.execute('SELECT name, prize, winner_count FROM draw_events WHERE id = ?', (draw_id,))
-            draw = cursor.fetchone()
-            
-            if not draw:
-                await update.message.reply_text("❌ ပွဲအမှတ် မှားယွင်းနေပါသည်။")
-                return
-            
-            draw_name, prize, winner_count = draw
-            
-            # Get participants
-            cursor.execute('''
-                SELECT u.telegram_id, u.full_name, u.username 
-                FROM participants p 
-                JOIN users u ON p.user_id = u.id 
-                WHERE p.draw_id = ?
-            ''', (draw_id,))
-            participants = cursor.fetchall()
-            
-            if len(participants) < winner_count:
-                await update.message.reply_text(f"❌ ဝင်ရောက်သူ {len(participants)} ဦးသာရှိပြီး ဆုရှင် {winner_count} ဦး ဆွဲရန် မလုံလောက်ပါ။")
-                return
-            
-            # Draw winners randomly
-            import random
-            winners = random.sample(participants, winner_count)
-            
-            # Save winners
-            for winner in winners:
-                telegram_id, full_name, username = winner
-                cursor.execute('SELECT id FROM users WHERE telegram_id = ?', (telegram_id,))
-                user_id = cursor.fetchone()[0]
-                cursor.execute(
-                    'INSERT INTO winners (draw_id, user_id) VALUES (?, ?)',
-                    (draw_id, user_id)
-                )
-            
-            # Update draw status
-            cursor.execute('UPDATE draw_events SET status = "completed" WHERE id = ?', (draw_id,))
-            conn.commit()
-            
-            # Announce winners
-            winners_text = f"""
-🎉 CONGRATULATIONS! 🎉
+# Telegram Application ကို စတင်ခြင်း
+application = Application.builder().token(BOT_TOKEN).build()
 
-ပွဲအမည်: {draw_name}
-ဆုကြေး: {prize}
+# Command Handler များကို ထည့်သွင်းခြင်း
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("register", register))
+application.add_handler(CommandHandler("create_raffle", create_raffle))
+application.add_handler(CommandHandler("join_raffle", join_raffle))
+application.add_handler(CommandHandler("pick_winner", pick_winner))
 
-ဆုရှင်များ:
-"""
-            for i, winner in enumerate(winners, 1):
-                telegram_id, full_name, username = winner
-                mention = f"@{username}" if username else full_name
-                winners_text += f"{i}. {mention}\n"
-            
-            winners_text += f"\nဆုရှင်အားလုံးကို ဂုဏ်ပြုအပ်ပါသည်! 🥳"
-            
-            await update.message.reply_text(winners_text)
-            
-            # Notify winners individually
-            for winner in winners:
-                telegram_id, full_name, username = winner
-                try:
-                    await context.bot.send_message(
-                        chat_id=telegram_id,
-                        text=f"""
-🎊 ဂုဏ်ပြုပါတယ်!
+# Flask Web Server
+flask_app = Flask(__name__)
 
-သင် {draw_name} ဆွဲကံပွဲတွင် ဆုရှင်အဖြစ် ရွေးချယ်ခြင်းခံရပါသည်!
-
-ဆုကြေး: {prize}
-
-ကျေးဇူးတင်ပါတယ်! 🎁
-                        """
-                    )
-                except Exception as e:
-                    logging.error(f"Could not notify winner: {e}")
-            
-        except Exception as e:
-            logging.error(f"Draw winner error: {e}")
-            await update.message.reply_text("❌ ဆုရှင်ဆွဲရာတွင် အမှားတစ်ခုဖြစ်နေပါသည်။")
-        finally:
-            conn.close()
-    
-    async def my_tickets(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        conn = sqlite3.connect('luckydraw.db')
-        cursor = conn.cursor()
-        
-        try:
-            # Get user's participations
-            cursor.execute('''
-                SELECT de.id, de.name, de.prize, de.status, p.joined_at
-                FROM participants p
-                JOIN draw_events de ON p.draw_id = de.id
-                JOIN users u ON p.user_id = u.id
-                WHERE u.telegram_id = ?
-                ORDER BY p.joined_at DESC
-            ''', (user.id,))
-            tickets = cursor.fetchall()
-            
-            if not tickets:
-                await update.message.reply_text("ℹ️  သင် ယခုအချိန်ထိ ဆွဲကံပွဲများတွင် မပါဝင်ရသေးပါ။\n\n/list_draws ဖြင့် ပွဲများကြည့်ပြီး ဝင်ရောက်နိုင်ပါတယ်။")
-                return
-            
-            tickets_text = "🎫 သင့်တီကတ်များ:\n\n"
-            for ticket in tickets:
-                draw_id, name, prize, status, joined_at = ticket
-                status_emoji = "✅" if status == 'completed' else "⏳"
-                tickets_text += f"""
-{status_emoji} {name}
-ဆုကြေး: {prize}
-အခြေအနေ: {status}
-ဝင်ရောက်သည့်နေ့: {joined_at[:10]}
-────────────────────
-                """
-            
-            await update.message.reply_text(tickets_text)
-            
-        except Exception as e:
-            logging.error(f"My tickets error: {e}")
-            await update.message.reply_text("❌ တီကတ်များရယူရာတွင် အမှားတစ်ခုဖြစ်နေပါသည်။")
-        finally:
-            conn.close()
-
-# Initialize bot
-bot = LuckyDrawBot()
-
-@app.route('/')
+@flask_app.route('/')
 def home():
-    return "Lucky Draw Myanmar Bot is Running! 🎯"
+    """Uptime Robot အတွက် Health Check Endpoint"""
+    return "Bot is running!", 200
 
-@app.route('/webhook', methods=['POST'])
-async def webhook():
-    """Webhook endpoint for Telegram"""
-    update = Update.de_json(request.get_json(), bot.application.bot)
-    await bot.application.process_update(update)
-    return 'OK'
+@flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
+async def webhook_handler():
+    """Telegram Webhook Endpoint"""
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+    return jsonify({'status': 'ok'})
 
-def set_webhook():
-    """Set webhook on startup"""
-    if os.getenv('WEBHOOK_URL'):
-        webhook_url = f"{os.getenv('WEBHOOK_URL')}/webhook"
-        bot.application.bot.set_webhook(webhook_url)
-        logging.info(f"Webhook set to: {webhook_url}")
+import asyncio
+async def set_webhook():
+    """Bot စတင်စဉ်တွင် Webhook ကို Telegram တွင် သတ်မှတ်ခြင်း။"""
+    await application.bot.set_webhook(url=f"{WEBHOOK_URL}{BOT_TOKEN}")
 
+if BOT_TOKEN and WEBHOOK_URL:
+    asyncio.run(set_webhook())
+
+
+# Gunicorn/Render မှ စတင်သောအခါ Flask App ကို run ရန်။
 if __name__ == '__main__':
-    set_webhook()
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    # ဒါက Local မှာ စမ်းသပ်ဖို့သာ ဖြစ်ပါတယ်။
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
