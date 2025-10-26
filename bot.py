@@ -323,7 +323,7 @@ flask_app = Flask(__name__)
 def home():
     return "Bot is running!", 200
 
-# Webhook Handler (FIXED)
+# Webhook Handler (FINAL FIXED VERSION - asyncio.create_task ကို ဖြုတ်ပြီး await ကို တိုက်ရိုက်သုံးခြင်း)
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
 async def webhook_handler(): 
     if request.method == "POST":
@@ -331,10 +331,11 @@ async def webhook_handler():
         
         # 🚨 FIX: Application ကို initialize လုပ်ပေးခြင်း 🚨
         if not application.updater and not application.job_queue:
-            # initialize() ကို တစ်ခါပဲ ခေါ်ဖို့ လိုပါတယ်။
             await application.initialize() 
             
-        asyncio.create_task(application.process_update(update)) 
+        # 🚨 FINAL FIX: Update ကို ချက်ချင်း Process လုပ်ပြီး Timeout ဖြစ်တာကို ရှောင်ခြင်း 🚨
+        await application.process_update(update) 
+        
     return jsonify({'status': 'ok'})
 
 # Webhook set လုပ်တဲ့ code ကို ဖြုတ်လိုက်ပါပြီ။ Manual set လုပ်ပြီးသားဖြစ်လို့ ဒီနေရာမှာ Error တက်စရာမလိုတော့ပါ။
