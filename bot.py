@@ -329,11 +329,11 @@ def process_update_sync(json_data):
             print(f"Error parsing JSON data in sync helper: {e}")
             return # JSON error ဖြစ်ရင် ရပ်
         
-        # 🚨 FINAL FIX: Initialization Check ကို Helper ထဲမှာ ပြန်ထည့်ပါ 🚨
+        # 🚨 FINAL LOG FIX: Initialization အောင်မြင်ကြောင်း စာထုတ်ခြင်း 🚨
         # Worker တိုင်းက ပထမဆုံး Request ဝင်လာချိန်မှာ Initialize လုပ်စေခြင်း
         if not application.updater and not application.job_queue:
             await application.initialize() 
-            print("Application Initialized on first request!")
+            print("INFO: Bot Initialized!") # <--- 🚨 Log Message အသစ် 🚨
             
         await application.process_update(update) 
         
