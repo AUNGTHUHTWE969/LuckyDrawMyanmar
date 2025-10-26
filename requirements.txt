@@ -9,3 +9,4 @@ Flask
 gunicorn
 psycopg2-binary  # PostgreSQL driver
 SQLAlchemy       # Database ORM
+SQLAlchemy>=2.0.25,<2.1
