@@ -30,13 +30,20 @@ raffle_state = {
 
 # --- Database Setup ---
 DB_URL = os.environ.get("DATABASE_URL")
+
 if DB_URL:
     # Render PostgreSQL URL ကို SQLAlchemy အတွက် ပုံစံပြောင်းပါ
     DATABASE_URL = DB_URL.replace("postgres://", "postgresql://", 1) 
-    engine = create_engine(DATABASE_URL)
+    
+    # 🚨 FINAL FIX: SSL MODE ကို ထည့်သွင်းခြင်း (Render Postgres အတွက် မဖြစ်မနေ လိုအပ်သည်)
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={
+            "sslmode": "require"  # SSL ကို မဖြစ်မနေ သုံးရန် သတ်မှတ်ခြင်း
+        }
+    )
 else:
     engine = create_engine("sqlite:///raffle_data.db") # Local Test အတွက်သာ
-# logging.info(f"Using DB URL: {DATABASE_URL}") # Debugging အတွက်သာ
     
 Base = declarative_base()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -60,14 +67,13 @@ def get_db():
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    is_admin_user = is_admin(user_id)
+    is_admin_user = user_id == ADMIN_ID
     reply_markup = get_main_keyboard(is_admin_user)
     
     message = (
         "👋 **Lucky Draw Myanmar Bot မှ ကြိုဆိုပါတယ်!**\n\n"
         "အောက်က ခလုတ်တွေကို နှိပ်ပြီး လုပ်ဆောင်ချက်တွေ စတင်နိုင်ပါတယ်။"
     )
-    # 🚨 FIX: DB Connection Error ကို ရှောင်ရှားရန် Reply Text မပို့မီ Logic ကို ရှင်းလင်းထားပါ
     await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
 
 async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -75,7 +81,7 @@ async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     username = update.effective_user.username or "N/A"
     full_name = update.effective_user.full_name
     
-    # 🚨 FINAL FIX: DB Error များကို ဖမ်းယူရန် Outer Try/Except ကို အသုံးပြုခြင်း
+    # 🚨 DB Error များကို ဖမ်းယူရန် Outer Try/Except ကို အသုံးပြုခြင်း
     try:
         with get_db() as db:
             try:
@@ -97,12 +103,34 @@ async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             pass
             
 # --- (Other Handlers: current_raffle_command, admin_menu_command, create_raffle_command, handle_admin_actions, handle_join_raffle, pick_winner_handler) ---
-# ... (ဤနေရာတွင် အခြား handlers များအားလုံးကို ယခင် Code အတိုင်း ထားရှိပါ) ...
+# ... (ဤနေရာတွင် အခြား Handlers များအားလုံးကို ယခင် Code အတိုင်း ထားရှိပါ) ...
+# (Placeholders for other handlers to complete the file)
+async def current_raffle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Add your logic here
+    await update.message.reply_text("လက်ရှိ မဲပေါက်ပစ္စည်း မရှိသေးပါ။")
 
-# --- Helper Functions & UI Components (အတိုချုံး) ---
-def is_admin(user_id: int) -> bool:
-    return user_id == ADMIN_ID
+async def admin_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Add your logic here
+    if update.effective_user.id == ADMIN_ID:
+        await update.message.reply_text("Admin Menu ဖွင့်ပါပြီ။")
+    else:
+        await update.message.reply_text("သင်သည် Admin မဟုတ်ပါ။")
+        
+async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Add your logic here
+    pass
+async def handle_admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Add your logic here
+    pass
+async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Add your logic here
+    pass
+async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False) -> None:
+    # Add your logic here
+    pass
+# ... (End of other handlers) ...
 
+# --- Helper Functions & UI Components ---
 def get_main_keyboard(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
     # ... (Keyboard logic)
     keyboard = [
@@ -117,28 +145,8 @@ def get_join_inline_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton("Join Raffle 🎉", callback_data='join_raffle')]]
     return InlineKeyboardMarkup(buttons)
 
-# --- (Other Handlers နေရာများတွင် အောက်ပါ Handlers များ ပါဝင်ရန်) ---
-async def current_raffle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (logic)
-    pass
-async def admin_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (logic)
-    pass
-async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (logic)
-    pass
-async def handle_admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (logic)
-    pass
-async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (logic)
-    pass
-async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False) -> None:
-    # ... (logic)
-    pass
 
-
-# --- Application Setup & Webhook (FINAL STABLE FIX) ---
+# --- Application Setup & Webhook (Gunicorn Stable Fix) ---
 
 application = None # Global Application object
 flask_app = Flask(__name__)
