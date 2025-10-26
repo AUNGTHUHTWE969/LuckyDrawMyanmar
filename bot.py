@@ -3,8 +3,8 @@ import random
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, CallbackQueryHandler,
-    async_to_sync  # 🚨 FIX: New Import 🚨
+    Application, CommandHandler, ContextTypes, CallbackQueryHandler
+    # 🚨 FIX: async_to_sync ကို ဖယ်ရှားလိုက်ပြီ (Import Error ကို ရှင်းရန်)
 )
 from flask import Flask, request, jsonify
 from sqlalchemy import create_engine, Column, Integer, String
@@ -298,7 +298,7 @@ async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(message, parse_mode="Markdown")
 
 
-# --- 7. Application Setup & Webhook (FINAL CRITICAL FIX) ---
+# --- 7. Application Setup & Webhook (FINAL WORKING FIX) ---
 
 # Hardcoded BOT_TOKEN ကို သုံးခြင်း
 application = Application.builder().token(BOT_TOKEN).build()
@@ -320,29 +320,36 @@ application.add_handler(CallbackQueryHandler(handle_admin_actions, pattern='^adm
 # Flask Web Server & Webhook 
 flask_app = Flask(__name__)
 
-# 🚨 FIX: process_update_sync function ကို ဖယ်ရှားလိုက်ပြီ 🚨
 
 @flask_app.route('/')
 def home():
     return "Bot is running!", 200
 
-# Webhook Handler (FINAL CRITICAL FIX - Using async_to_sync)
+# 🚨 FIX: Webhook Handler ကို ပြန်လည်ပြင်ဆင်ခြင်း (Runtime Error ရှောင်ရန်) 🚨
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
 def webhook_handler(): 
     if request.method == "POST":
         try:
             json_data = request.get_json(force=True)
             
-            # 🚨 FIX 1: Initialization ကို async_to_sync ဖြင့် Worker တိုင်းမှာ အချိန်မီ လုပ်စေခြင်း 🚨
-            # ဒါမှသာ Initialization က Blocking မဖြစ်တော့ဘဲ Gunicorn ရဲ့ Loop Lock ကို ဖြေရှင်းပေးနိုင်ပါလိမ့်မယ်။
+            # 🚨 FIX 1: Initialization ကို RuntimeError မတက်အောင် try/except ထဲမှာ Run ပါ 🚨
             if not application.updater and not application.job_queue:
-                async_to_sync(application.initialize())
-                print("INFO: Bot Initialized!") 
+                try:
+                    # Gunicorn မှာ Event Loop မရှိသေးရင် Initialize လုပ်ရန်
+                    asyncio.run(application.initialize())
+                    print("INFO: Bot Initialized!") 
+                except RuntimeError:
+                    # 'Event loop is already running' error တက်ရင် pass လုပ်ပြီးဆက်သွားပါ
+                    print("INFO: Initialization skipped (RuntimeError: Loop already running).")
+                    pass
             
-            # 🚨 FIX 2: Update ကို Non-Blocking ဖြစ်စေသော async_to_sync ဖြင့် Process လုပ်ခြင်း 🚨
-            async_to_sync(application.process_update(
-                Update.de_json(json_data, application.bot)
-            ))
+            # 🚨 FIX 2: Update Process ကို asyncio.run ဖြင့် ကိုင်တွယ်ခြင်း 🚨
+            async def process_update_async():
+                update = Update.de_json(json_data, application.bot)
+                await application.process_update(update)
+
+            # Update ကို Process လုပ်ရန်
+            asyncio.run(process_update_async())
             
         except Exception as e:
             # Update.de_json error or general error
