@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 
 # .env file မှ environment variables များကို load လုပ်ရန် (Local Development အတွက်)
+# Render တွင် run လျှင် ၎င်းကို ကျော်သွားမည်။
 load_dotenv() 
 
 # --- 1. Configuration & Global State ---
@@ -34,9 +35,11 @@ raffle_state = {
 
 DB_URL = os.environ.get("DATABASE_URL")
 if DB_URL:
-    DATABASE_URL = DB_URL.replace("postgres://", "postgresql://", 1)
+    # Render DB URL ကို SQLAlchemy အတွက် မှန်ကန်သော ပုံစံသို့ ပြောင်းလဲခြင်း
+    DATABASE_URL = DB_URL.replace("postgres://", "postgresql://", 1) 
     engine = create_engine(DATABASE_URL)
 else:
+    # DATABASE_URL မရှိပါက local sqlite ကို သုံးခြင်း
     engine = create_engine("sqlite:///raffle_data.db")
 
 Base = declarative_base()
@@ -72,6 +75,7 @@ def get_main_keyboard(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
     ]
     
     if is_admin_user:
+        # Admin အတွက် Dashboard Button ကို ထည့်သွင်းခြင်း
         keyboard.append([KeyboardButton("/admin_menu")])
         
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
@@ -144,6 +148,7 @@ async def admin_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     message = "👑 **Admin လုပ်ဆောင်ချက်များ:**"
     
+    # 💡 Admin အတွက် Inline Keyboard ကို သုံးခြင်း
     buttons = [
         [InlineKeyboardButton("🎁 ကံစမ်းမဲ အသစ် စတင်ရန်", callback_data='admin_create_raffle_prompt')],
         [InlineKeyboardButton("🗳️ ကံထူးရှင် ရွေးရန်", callback_data='admin_pick_winner')]
@@ -174,6 +179,7 @@ async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TY
     raffle_state["prize"] = prize
     raffle_state["participants"].clear()
 
+    # 💡 UI: Join Button ပါသော ကြေညာစာသားကို Inline Keyboard ဖြင့် ပို့ပေးခြင်း
     message = (
         f"🎉 **ကံစမ်းမဲ စတင်ပါပြီ!** 🎉\n\n"
         f"🎁 **ဆု:** {prize}\n"
@@ -230,6 +236,7 @@ async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         raffle_state["participants"].add(user_id)
         
+        # 💡 Message ကို update လုပ်ပြီး ပါဝင်သူအရေအတွက်ကို ပြောင်းလဲပြခြင်း
         new_text = (
             f"🎉 **ကံစမ်းမဲ စတင်ပါပြီ!** 🎉\n\n"
             f"🎁 **ဆု:** {raffle_state['prize']}\n"
@@ -251,13 +258,16 @@ async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id if not is_callback else update.callback_query.from_user.id
 
     if not is_admin(user_id):
+        # Admin မဟုတ်ရင် ပြန်ထွက်
         return
 
     if not raffle_state["is_active"]:
+        message = "❌ ကံစမ်းမဲ မစတင်ရသေးပါ။"
+    
         if is_callback:
-             await update.callback_query.edit_message_text("❌ ကံစမ်းမဲ မစတင်ရသေးပါ။")
+             await update.callback_query.edit_message_text(message)
         else:
-             await update.message.reply_text("❌ ကံစမ်းမဲ မစတင်ရသေးပါ။")
+             await update.message.reply_text(message)
         return
 
     participants = list(raffle_state["participants"])
@@ -269,6 +279,7 @@ async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         with get_db() as db:
             winner_user = db.query(User).filter(User.id == winner_id).first()
+            # Winner ကို Mention လုပ်နိုင်ရန်
             winner_mention = f"[{winner_user.full_name}](tg://user?id={winner_id})" if winner_user else f"User ID: {winner_id}"
         
         message = (
@@ -277,6 +288,7 @@ async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"🎁 **ဆု:** {raffle_state['prize']}"
         )
 
+    # ကံစမ်းမဲကို ပြန်ပိတ်ပြီး state ရှင်းခြင်း
     raffle_state["is_active"] = False
     raffle_state["prize"] = None
     raffle_state["participants"].clear()
@@ -305,7 +317,7 @@ application.add_handler(CallbackQueryHandler(handle_join_raffle, pattern='^join_
 application.add_handler(CallbackQueryHandler(handle_admin_actions, pattern='^admin_create_raffle_prompt$|^admin_pick_winner$'))
 
 
-# Flask Web Server & Webhook (unchanged)
+# Flask Web Server & Webhook 
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -319,18 +331,22 @@ async def webhook_handler():
         asyncio.create_task(application.process_update(update))
     return jsonify({'status': 'ok'})
 
-# bot.py (new code - အသစ်ပြင်ဆင်ထားသော code)
-
+# 💡 Webhook URL ပြဿနာကို ဖြေရှင်းထားသော function
 async def set_webhook_on_start():
     if BOT_TOKEN and WEBHOOK_URL:
-        # WEBHOOK_URL ရဲ့ နောက်ဆုံးက / ကို ဖြုတ်ပြီး၊ BOT_TOKEN ကို / နဲ့ တွဲပေးလိုက်ခြင်းဖြင့် 
-        # https://lucky-draw-myanmar.onrender.com/[TOKEN] ပုံစံ မှန်ကန်သွားမည်
-        await application.bot.set_webhook(url=f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}")
+        # .rstrip('/') ဖြင့် WEBHOOK_URL ရဲ့ နောက်ဆုံးက / ကို ဖြုတ်ပြီးမှ BOT_TOKEN ကို / နဲ့ တွဲပေးလိုက်ခြင်းဖြင့် 
+        # Invalid URL Error ကို ဖြေရှင်းပေးသည်။
+        await application.bot.set_webhook(url=f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}") 
+
 if BOT_TOKEN and WEBHOOK_URL:
     try:
         asyncio.run(set_webhook_on_start())
     except Exception as e:
-        print(f"Error setting webhook: {e}")
+        # Deploy Log တွင် Webhook Error ကို မြင်ရသော်လည်း Bot သည် အလုပ်လုပ်နိုင်သည်။
+        print(f"Error setting webhook: {e}") 
 
+# 💡 Render မှာ Run ရန်
 if __name__ == '__main__':
+    # gunicorn ကို Start Command မှာ သုံးထား၍ ဤအပိုင်းသည် အရေးမကြီးတော့ပါ။
+    # Development အတွက်သာ သုံးသည်။
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
