@@ -319,11 +319,13 @@ async def webhook_handler():
         asyncio.create_task(application.process_update(update))
     return jsonify({'status': 'ok'})
 
+# bot.py (new code - အသစ်ပြင်ဆင်ထားသော code)
+
 async def set_webhook_on_start():
     if BOT_TOKEN and WEBHOOK_URL:
-        # WEBHOOK_URL ကို Render မှာ https://lucky-draw-myanmar.onrender.com/ လိုမျိုး ထည့်ပေးရပါမယ်။
-        await application.bot.set_webhook(url=f"{WEBHOOK_URL}{BOT_TOKEN}")
-
+        # WEBHOOK_URL ရဲ့ နောက်ဆုံးက / ကို ဖြုတ်ပြီး၊ BOT_TOKEN ကို / နဲ့ တွဲပေးလိုက်ခြင်းဖြင့် 
+        # https://lucky-draw-myanmar.onrender.com/[TOKEN] ပုံစံ မှန်ကန်သွားမည်
+        await application.bot.set_webhook(url=f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}")
 if BOT_TOKEN and WEBHOOK_URL:
     try:
         asyncio.run(set_webhook_on_start())
