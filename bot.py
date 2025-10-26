@@ -180,7 +180,7 @@ async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TY
     # 💡 UI: Join Button ပါသော ကြေညာစာသားကို Inline Keyboard ဖြင့် ပို့ပေးခြင်း
     message = (
         f"🎉 **ကံစမ်းမဲ စတင်ပါပြီ!** 🎉\n\n"
-        f"🎁 **ဆု:** {raffle_state['prize']}\n"
+        f"🎁 **ဆု:** {prize}\n"
         f"👥 **လက်ရှိ ပါဝင်သူ:** {len(raffle_state['participants'])} ဦး\n\n"
         "ပါဝင်ဖို့အတွက် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
     )
@@ -319,31 +319,45 @@ application.add_handler(CallbackQueryHandler(handle_admin_actions, pattern='^adm
 # Flask Web Server & Webhook 
 flask_app = Flask(__name__)
 
-@flask_app.route('/')
-def home():
-    return "Bot is running!", 200
-
-# Webhook Handler (FINAL FIXED VERSION - FLASK ASYNC CONTEXT FIX)
-@flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
-async def webhook_handler(): 
-    if request.method == "POST":
-        
-        # 🚨 FIX: request.get_json ကို await ဖြင့် ခေါ်ယူပြီး JSON Parsing တွင် 500 Error မတက်အောင် ဖြေရှင်းခြင်း 🚨
+# Helper function for synchronous Flask handler to run async code
+def process_update_sync(json_data):
+    """Async Application Process ကို Sync Function ထဲကနေ Run ပေးဖို့ Helper"""
+    async def process():
         try:
-            json_data = await request.get_json(force=True)
             update = Update.de_json(json_data, application.bot)
         except Exception as e:
-            # Error ရှိရင်တောင် Telegram ကို 500 မပြန်ဘဲ 200 OK ပြန်ပေးခြင်း
-            print(f"Error parsing JSON data: {e}")
-            return jsonify({'status': 'JSON Error'}), 200 
-
+            print(f"Error parsing JSON data in sync helper: {e}")
+            return # JSON error ဖြစ်ရင် ရပ်
+        
         # Initialization check
         if not application.updater and not application.job_queue:
             await application.initialize() 
             
-        # Update ကို ချက်ချင်း Process လုပ်ခြင်း (ယခင် Fix)
         await application.process_update(update) 
         
+    # Thread ကို Block မဖြစ်စေဘဲ Update ကို Run နိုင်ဖို့ ချက်ချင်း Execute လုပ်ခြင်း
+    asyncio.run(process())
+
+
+@flask_app.route('/')
+def home():
+    return "Bot is running!", 200
+
+# Webhook Handler (FINAL SYNTAX FIX - request.get_json() မှာ await ဖြုတ်လိုက်ပြီ)
+@flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
+def webhook_handler(): 
+    if request.method == "POST":
+        # 🚨 FINAL SYNTAX FIX: request.get_json() ကို await မပါဘဲ တိုက်ရိုက်ခေါ်ခြင်း 🚨
+        try:
+            # Flask ရဲ့ request.get_json ကို await မပါဘဲ တိုက်ရိုက်သုံးခြင်း
+            json_data = request.get_json(force=True) 
+            process_update_sync(json_data) 
+        except Exception as e:
+            # JSON parsing error တက်ရင် ဒါမှမဟုတ် အခြား unexpected error တက်ရင်
+            print(f"CRITICAL ERROR in Flask Handler: {e}")
+            # Error တက်ရင်တောင် Telegram ကို 500 မပြန်ဘဲ 200 OK ပြန်ပေးပါ
+            return jsonify({'status': 'CRITICAL ERROR'}), 200 
+            
     # Telegram ကို 500 Error မပြန်မိစေဖို့ 200 OK ကို အမြဲပြန်ပေးပါ။
     return jsonify({'status': 'ok'}), 200
 
