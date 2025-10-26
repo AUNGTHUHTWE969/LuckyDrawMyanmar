@@ -1,6 +1,7 @@
 import os
 import random
 import asyncio
+import threading # 🚨 New Import: Initialization ကို Thread ဖြင့် Run ရန်
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, CallbackQueryHandler
@@ -329,9 +330,8 @@ def process_update_sync(json_data):
             print(f"Error parsing JSON data in sync helper: {e}")
             return # JSON error ဖြစ်ရင် ရပ်
         
-        # Initialization check
-        if not application.updater and not application.job_queue:
-            await application.initialize() 
+        # 🚨 FIX: Initialization check ကို ဖယ်လိုက်ပါ 🚨
+        # application.initialize() ကို အောက်က Threaded Startup မှာ လုပ်ပြီးသားဖြစ်လို့ ဒီနေရာမှာ မလိုအပ်တော့ပါ။
             
         await application.process_update(update) 
         
@@ -347,21 +347,32 @@ def home():
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
 def webhook_handler(): 
     if request.method == "POST":
-        # 🚨 FINAL SYNTAX FIX: request.get_json() ကို await မပါဘဲ တိုက်ရိုက်ခေါ်ခြင်း 🚨
+        # Flask ရဲ့ request.get_json ကို await မပါဘဲ တိုက်ရိုက်သုံးခြင်း
         try:
-            # Flask ရဲ့ request.get_json ကို await မပါဘဲ တိုက်ရိုက်သုံးခြင်း
             json_data = request.get_json(force=True) 
             process_update_sync(json_data) 
         except Exception as e:
-            # JSON parsing error တက်ရင် ဒါမှမဟုတ် အခြား unexpected error တက်ရင်
-            print(f"CRITICAL ERROR in Flask Handler: {e}")
             # Error တက်ရင်တောင် Telegram ကို 500 မပြန်ဘဲ 200 OK ပြန်ပေးပါ
+            print(f"CRITICAL ERROR in Flask Handler: {e}")
             return jsonify({'status': 'CRITICAL ERROR'}), 200 
             
     # Telegram ကို 500 Error မပြန်မိစေဖို့ 200 OK ကို အမြဲပြန်ပေးပါ။
     return jsonify({'status': 'ok'}), 200
 
-# Webhook set လုပ်တဲ့ code ကို ဖြုတ်လိုက်ပါပြီ။ Manual set လုပ်ပြီးသားဖြစ်လို့ ဒီနေရာမှာ Error တက်စရာမလိုတော့ပါ။
+# 🚨 CRITICAL FIX: Application Initialization ကို Bot Service စတဲ့အချိန်မှာ တစ်ခါတည်းလုပ်ပါ 🚨
+async def startup_initialize():
+    """Application Initialization ကို Asynchronously လုပ်ဆောင်ခြင်း"""
+    if not application.updater and not application.job_queue:
+        await application.initialize()
+        print("Telegram Application Initialized Successfully!")
+
+def initialize_bot_thread():
+    """Async Initialization ကို Threading ဖြင့် စတင်ခြင်း"""
+    asyncio.run(startup_initialize())
+
+# Thread ဖြင့် run လိုက်ခြင်း (Bot Service စတဲ့အချိန်မှာ Gunicorn က ခေါ်တဲ့အခါ run ပါလိမ့်မည်)
+threading.Thread(target=initialize_bot_thread).start()
+
 
 if __name__ == '__main__':
     # Render မှာ gunicorn ကို Start Command မှာ သုံးထားသည်။
