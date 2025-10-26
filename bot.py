@@ -21,7 +21,7 @@ BOT_TOKEN = os.environ.get("8444084929:AAFnXo4U8U3gZAh2C2zeAks0hk3qGstLcNM")
 WEBHOOK_URL = os.environ.get("https://lucky-draw-myanmar.onrender.com")
 # Admin ID ကို String အနေနဲ့ ယူပြီး Integer အဖြစ် ပြောင်းပါမည်။ မရှိရင် 0 ကို သုံးပါမည်။
 try:
-    ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
+    ADMIN_ID = int(os.environ.get("8070878424", 0))
 except ValueError:
     ADMIN_ID = 0
 
