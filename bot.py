@@ -325,15 +325,15 @@ def home():
 
 # BOT_TOKEN ကို Hardcode လုပ်ထားခြင်းကြောင့် URL လည်း မှန်ကန်စွာ ရရှိမည်
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
-async def webhook_handler():
+async def webhook_handler(): 
     if request.method == "POST":
         update = Update.de_json(request.get_json(force=True), application.bot)
-        asyncio.create_task(application.process_update(update))
+        # Flask[async] ကို ထည့်သွင်းပြီးပြီဖြစ်၍ async ကို သုံးနိုင်သည်။
+        asyncio.create_task(application.process_update(update)) 
     return jsonify({'status': 'ok'})
 
-# Webhook URL ပြဿနာကို ဖြေရှင်းထားသော function
+# Webhook URL ကို API တွင် မှန်ကန်စွာ set လုပ်ခြင်း
 async def set_webhook_on_start():
-    # Hardcoded WEBHOOK_URL ကို သုံးခြင်း
     if BOT_TOKEN and WEBHOOK_URL:
         # URL နဲ့ Token ကို မှန်ကန်စွာ ပေါင်းစပ်ပေးခြင်း
         await application.bot.set_webhook(url=f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}") 
@@ -342,7 +342,7 @@ if BOT_TOKEN and WEBHOOK_URL:
     try:
         asyncio.run(set_webhook_on_start())
     except Exception as e:
-        # Deploy Log တွင် Webhook Error ကို မြင်ရသော်လည်း Bot သည် အလုပ်လုပ်နိုင်သည်။
+        # Webhook set လုပ်ရာတွင် ပြဿနာတက်သော်လည်း Deploy သည် ဆက်လက်သွားမည်။
         print(f"Error setting webhook: {e}") 
 
 if __name__ == '__main__':
