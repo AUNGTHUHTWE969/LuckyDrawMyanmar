@@ -20,7 +20,8 @@ load_dotenv()
 # 🚨 Environment variables ကို သုံးပါ
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8444084929:AAFnXo4U8U3gZAh2C2zeAks0hk3qGstLcNM")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "8070878424"))
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://lucky-draw-myanmar.onrender.com")
+# Webhook URL ကို HTTPS ဖြင့်သာ သုံးရန် သေချာပါစေ။
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://lucky-draw-myanmar.onrender.com") 
 
 raffle_state = {
     "is_active": False,
@@ -266,8 +267,7 @@ def webhook_handler():
         try:
             json_data = request.get_json(force=True)
             
-            # 🚨 Initialization Check & Setup: Worker တိုင်း Request ဝင်လာချိန်မှာ လုပ်ရမည့် အရာများ 🚨
-            # application မရှိသေးရင် အသစ်ပြန် build လုပ်ပြီး initialize လုပ်ပါ။
+            # Initialization Check & Setup: Worker တိုင်း Request ဝင်လာချိန်မှာ လုပ်ရမည့် အရာများ 
             if application is None:
                 application = Application.builder().token(BOT_TOKEN).build()
                 
@@ -281,15 +281,21 @@ def webhook_handler():
                 application.add_handler(CallbackQueryHandler(handle_join_raffle, pattern='^join_raffle$'))
                 application.add_handler(CallbackQueryHandler(handle_admin_actions, pattern='^admin_create_raffle_prompt$|^admin_pick_winner$'))
                 
-                # Application.initialize() ကို ခေါ်ယူခြင်း
+                # Initialization ကို ခေါ်ယူခြင်း
                 async def worker_initialize():
                     await application.initialize()
-                    # Webhook URL ကို တစ်ခါတည်း set လုပ်ပါ (Optional: Error ရှောင်ရန်)
+                    # Webhook URL ကို set လုပ်ပါ
                     await application.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}") 
                     print(f"INFO: Worker Application Initialized! Webhook set to {WEBHOOK_URL}/{BOT_TOKEN}")
                 
-                # Initialization ကို asyncio.run ဖြင့် ခေါ်ယူပါ (Gunicorn Sync Worker အတွက်)
-                asyncio.run(worker_initialize())
+                try:
+                    # Gunicorn Sync Worker အတွက် asyncio.run ဖြင့် Initialization ကို ပြီးအောင် လုပ်ပါ
+                    asyncio.run(worker_initialize())
+                except Exception as init_e:
+                    # Webhook URL invalid ဖြစ်ရင်၊ ဒါမှမဟုတ် Initialization အချိန်မှာ Error တက်ရင် ဖမ်းပြီး Log ထုတ်ပါ
+                    # ဒါပေမဲ့ Telegram ကို 200 OK ပြန်ပေးရပါမည်
+                    print(f"CRITICAL ERROR during Worker Initialization: {init_e}")
+                    pass 
 
             # Update ကို Process လုပ်ရန်
             async def process_update_async():
@@ -300,8 +306,7 @@ def webhook_handler():
             asyncio.run(process_update_async())
             
         except Exception as e:
-            # Initialization error or update processing error 
-            # 🚨 Initialization error ဖြစ်ခဲ့ရင်လည်း Telegram ကို 200 OK ပြန်ပေးရပါမည်။
+            # Update processing error 
             print(f"CRITICAL ERROR in Flask Handler: {e}")
             return jsonify({'status': 'CRITICAL ERROR', 'message': str(e)}), 200 
             
@@ -309,8 +314,6 @@ def webhook_handler():
 
 
 # 🚨 FIX 3: if __name__ == '__main__': အောက်က Initialization Logic ကို ဖယ်ရှားခြင်း 🚨
-# Gunicorn ကို Start Command မှာ သုံးထားသည့်အတွက် Flask App ကိုသာ တိုက်ရိုက် run ပါ။
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    # Local မှာ စမ်းသပ်ရင် ဒီက run ပါမည်
     flask_app.run(host="0.0.0.0", port=port, debug=False)
