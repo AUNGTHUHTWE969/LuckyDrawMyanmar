@@ -1,7 +1,6 @@
 import os
 import random
 import asyncio
-# threading ကို ဖယ်လိုက်ပါပြီ၊ Initialization ကို Sync Call ဖြင့် အစားထိုးလိုက်သည်
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, CallbackQueryHandler
@@ -329,6 +328,12 @@ def process_update_sync(json_data):
         except Exception as e:
             print(f"Error parsing JSON data in sync helper: {e}")
             return # JSON error ဖြစ်ရင် ရပ်
+        
+        # 🚨 FINAL FIX: Initialization Check ကို Helper ထဲမှာ ပြန်ထည့်ပါ 🚨
+        # Worker တိုင်းက ပထမဆုံး Request ဝင်လာချိန်မှာ Initialize လုပ်စေခြင်း
+        if not application.updater and not application.job_queue:
+            await application.initialize() 
+            print("Application Initialized on first request!")
             
         await application.process_update(update) 
         
@@ -355,21 +360,6 @@ def webhook_handler():
             
     # Telegram ကို 500 Error မပြန်မိစေဖို့ 200 OK ကို အမြဲပြန်ပေးပါ။
     return jsonify({'status': 'ok'}), 200
-
-# 🚨 FINAL CRITICAL FIX: Application Initialization ကို Gunicorn Worker စတင်ချိန်မှာ ချက်ချင်းလုပ်ဆောင်ခြင်း 🚨
-try:
-    if not application.updater and not application.job_queue:
-        # 1. New Event Loop ကို ရယူခြင်း
-        loop = asyncio.new_event_loop()
-        # 2. Initialization ကို Loop ထဲမှာ Run ပြီး ပြီးဆုံးသည်အထိ စောင့်ခြင်း
-        loop.run_until_complete(application.initialize())
-        loop.close()
-        
-        print("Telegram Application Initialized (Gunicorn Fix) Successfully!")
-
-except Exception as e:
-    # Initialization Failure ကို Log မှာ ရေးပါ
-    print(f"CRITICAL INITIALIZATION ERROR: {e}")
 
 
 if __name__ == '__main__':
