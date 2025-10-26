@@ -245,9 +245,9 @@ async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await update.message.reply_text(message, parse_mode="Markdown")
 
-# --- 7. Application Setup & Webhook (FINAL FIX: GUNICORN COMPATIBLE) ---
+# --- 7. Application Setup & Webhook (FINAL STABLE FIX) ---
 
-# 🚨 FIX 1: Application ကို Global မှာ None သတ်မှတ်ပါ (Worker Initialization အတွက်) 🚨
+# 🚨 FIX 1: Application ကို Global မှာ None သတ်မှတ်ပါ
 application = None
 
 # Flask App
@@ -257,17 +257,25 @@ flask_app = Flask(__name__)
 def home():
     return "Bot is running!", 200
 
-# 🚨 FIX 2: Webhook Handler - Request ဝင်လာချိန်မှာ Application Initialize လုပ်ခြင်း 🚨
+# 🚨 FIX 2: Webhook Handler - Loop Closed Error ကို ဖြေရှင်းရန် 🚨
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook_handler():
-    """Webhook handler with proper initialization logic for Gunicorn workers."""
-    global application # Global application variable ကို သုံးပါ
+    """Final Webhook handler with proper loop management for Gunicorn."""
+    global application 
+    
+    # 🚨 FIX 3: Event Loop ကို ကိုယ်တိုင် ပြန်လည် ထိန်းချုပ်ခြင်း 🚨
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        # Loop မရှိရင် အသစ်ဖန်တီးပါ
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
     
     if request.method == "POST":
         try:
             json_data = request.get_json(force=True)
             
-            # Initialization Check & Setup: Worker တိုင်း Request ဝင်လာချိန်မှာ လုပ်ရမည့် အရာများ 
+            # Initialization Check & Setup:
             if application is None:
                 application = Application.builder().token(BOT_TOKEN).build()
                 
@@ -281,7 +289,7 @@ def webhook_handler():
                 application.add_handler(CallbackQueryHandler(handle_join_raffle, pattern='^join_raffle$'))
                 application.add_handler(CallbackQueryHandler(handle_admin_actions, pattern='^admin_create_raffle_prompt$|^admin_pick_winner$'))
                 
-                # Initialization ကို ခေါ်ယူခြင်း
+                # Initialization ကို Loop တွင် ပြီးအောင် လုပ်ခြင်း
                 async def worker_initialize():
                     await application.initialize()
                     # Webhook URL ကို set လုပ်ပါ
@@ -289,11 +297,10 @@ def webhook_handler():
                     print(f"INFO: Worker Application Initialized! Webhook set to {WEBHOOK_URL}/{BOT_TOKEN}")
                 
                 try:
-                    # Gunicorn Sync Worker အတွက် asyncio.run ဖြင့် Initialization ကို ပြီးအောင် လုပ်ပါ
-                    asyncio.run(worker_initialize())
+                    # loop.run_until_complete() ဖြင့် Initialization ကို ပြီးအောင် လုပ်ခြင်း
+                    loop.run_until_complete(worker_initialize())
                 except Exception as init_e:
-                    # Webhook URL invalid ဖြစ်ရင်၊ ဒါမှမဟုတ် Initialization အချိန်မှာ Error တက်ရင် ဖမ်းပြီး Log ထုတ်ပါ
-                    # ဒါပေမဲ့ Telegram ကို 200 OK ပြန်ပေးရပါမည်
+                    # Webhook error or initialization error
                     print(f"CRITICAL ERROR during Worker Initialization: {init_e}")
                     pass 
 
@@ -302,8 +309,8 @@ def webhook_handler():
                 update = Update.de_json(json_data, application.bot)
                 await application.process_update(update)
 
-            # Update Process ကို asyncio.run ဖြင့် ကိုင်တွယ်ခြင်း
-            asyncio.run(process_update_async())
+            # 🚨 FIX 4: Update Process ကို Loop တွင် ပြီးအောင် လုပ်ခြင်း 🚨
+            loop.run_until_complete(process_update_async())
             
         except Exception as e:
             # Update processing error 
@@ -313,7 +320,7 @@ def webhook_handler():
     return jsonify({'status': 'ok'}), 200
 
 
-# 🚨 FIX 3: if __name__ == '__main__': အောက်က Initialization Logic ကို ဖယ်ရှားခြင်း 🚨
+# 🚨 FIX 5: if __name__ == '__main__': အောက်က Initialization Logic ကို ဖယ်ရှားခြင်း 🚨
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port, debug=False)
