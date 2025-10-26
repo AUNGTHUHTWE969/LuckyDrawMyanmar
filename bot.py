@@ -180,7 +180,7 @@ async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TY
     # 💡 UI: Join Button ပါသော ကြေညာစာသားကို Inline Keyboard ဖြင့် ပို့ပေးခြင်း
     message = (
         f"🎉 **ကံစမ်းမဲ စတင်ပါပြီ!** 🎉\n\n"
-        f"🎁 **ဆု:** {prize}\n"
+        f"🎁 **ဆု:** {raffle_state['prize']}\n"
         f"👥 **လက်ရှိ ပါဝင်သူ:** {len(raffle_state['participants'])} ဦး\n\n"
         "ပါဝင်ဖို့အတွက် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
     )
@@ -323,20 +323,29 @@ flask_app = Flask(__name__)
 def home():
     return "Bot is running!", 200
 
-# Webhook Handler (FINAL FIXED VERSION - asyncio.create_task ကို ဖြုတ်ပြီး await ကို တိုက်ရိုက်သုံးခြင်း)
+# Webhook Handler (FINAL FIXED VERSION - FLASK ASYNC CONTEXT FIX)
 @flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
 async def webhook_handler(): 
     if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), application.bot)
         
-        # 🚨 FIX: Application ကို initialize လုပ်ပေးခြင်း 🚨
+        # 🚨 FIX: request.get_json ကို await ဖြင့် ခေါ်ယူပြီး JSON Parsing တွင် 500 Error မတက်အောင် ဖြေရှင်းခြင်း 🚨
+        try:
+            json_data = await request.get_json(force=True)
+            update = Update.de_json(json_data, application.bot)
+        except Exception as e:
+            # Error ရှိရင်တောင် Telegram ကို 500 မပြန်ဘဲ 200 OK ပြန်ပေးခြင်း
+            print(f"Error parsing JSON data: {e}")
+            return jsonify({'status': 'JSON Error'}), 200 
+
+        # Initialization check
         if not application.updater and not application.job_queue:
             await application.initialize() 
             
-        # 🚨 FINAL FIX: Update ကို ချက်ချင်း Process လုပ်ပြီး Timeout ဖြစ်တာကို ရှောင်ခြင်း 🚨
+        # Update ကို ချက်ချင်း Process လုပ်ခြင်း (ယခင် Fix)
         await application.process_update(update) 
         
-    return jsonify({'status': 'ok'})
+    # Telegram ကို 500 Error မပြန်မိစေဖို့ 200 OK ကို အမြဲပြန်ပေးပါ။
+    return jsonify({'status': 'ok'}), 200
 
 # Webhook set လုပ်တဲ့ code ကို ဖြုတ်လိုက်ပါပြီ။ Manual set လုပ်ပြီးသားဖြစ်လို့ ဒီနေရာမှာ Error တက်စရာမလိုတော့ပါ။
 
