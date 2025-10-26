@@ -4,7 +4,6 @@ import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, CallbackQueryHandler
-    # 🚨 FIX: async_to_sync ကို ဖယ်ရှားလိုက်ပြီ (Import Error ကို ရှင်းရန်)
 )
 from flask import Flask, request, jsonify
 from sqlalchemy import create_engine, Column, Integer, String
@@ -13,15 +12,15 @@ from contextlib import contextmanager
 from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 
-# .env file မှ environment variables များကို load လုပ်ရန် (Local Development အတွက်)
+# .env file မှ environment variables များကို load လုပ်ရန်
 load_dotenv() 
 
 # --- 1. Configuration & Global State ---
 
-# 🚨 Hardcoded အချက်အလက်များကို အသုံးပြုခြင်း 🚨
-BOT_TOKEN = "8444084929:AAFnXo4U8U3gZAh2C2zeAks0hk3qGstLcNM"
-ADMIN_ID = 8070878424
-WEBHOOK_URL = "https://lucky-draw-myanmar.onrender.com" 
+# 🚨 Environment variables ကို သုံးပါ
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8444084929:AAFnXo4U8U3gZAh2C2zeAks0hk3qGstLcNM")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "8070878424"))
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://lucky-draw-myanmar.onrender.com")
 
 raffle_state = {
     "is_active": False,
@@ -30,15 +29,11 @@ raffle_state = {
 }
 
 # --- 2. Database Setup ---
-
-# DATABASE_URL ကို Render Environment Variable မှ ယူသုံးပါမည်။
 DB_URL = os.environ.get("DATABASE_URL")
 if DB_URL:
-    # Render DB URL ကို SQLAlchemy အတွက် မှန်ကန်သော ပုံစံသို့ ပြောင်းလဲခြင်း
     DATABASE_URL = DB_URL.replace("postgres://", "postgresql://", 1) 
     engine = create_engine(DATABASE_URL)
 else:
-    # DATABASE_URL မရှိပါက local sqlite ကို သုံးခြင်း
     engine = create_engine("sqlite:///raffle_data.db")
 
 Base = declarative_base()
@@ -61,53 +56,34 @@ def get_db():
         db.close()
 
 # --- 3. Helper Functions & UI Components ---
-
 def is_admin(user_id: int) -> bool:
-    """Admin စစ်ဆေးခြင်း"""
     return user_id == ADMIN_ID
 
 def get_main_keyboard(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
-    """အမြဲသုံးရမည့် Command များကို Reply Keyboard (Dashboard) အဖြစ် ထုတ်ပေးခြင်း"""
-    
     keyboard = [
         [KeyboardButton("/register"), KeyboardButton("/current_raffle")],
     ]
-    
     if is_admin_user:
-        # Admin အတွက် Dashboard Button ကို ထည့်သွင်းခြင်း
         keyboard.append([KeyboardButton("/admin_menu")])
-        
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 def get_join_inline_keyboard() -> InlineKeyboardMarkup:
-    """ကံစမ်းမဲ ဝင်ရန် Inline Keyboard ကို ထုတ်ပေးခြင်း"""
-    buttons = [
-        [InlineKeyboardButton("Join Raffle 🎉", callback_data='join_raffle')]
-    ]
+    buttons = [[InlineKeyboardButton("Join Raffle 🎉", callback_data='join_raffle')]]
     return InlineKeyboardMarkup(buttons)
 
 # --- 4. Command Handlers ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/start command: Dashboard Keyboard ကို ပြသခြင်း"""
     user_id = update.effective_user.id
     is_admin_user = is_admin(user_id)
-    
     reply_markup = get_main_keyboard(is_admin_user)
     
     message = (
         "👋 **Lucky Draw Myanmar Bot မှ ကြိုဆိုပါတယ်!**\n\n"
         "အောက်က ခလုတ်တွေကို နှိပ်ပြီး လုပ်ဆောင်ချက်တွေ စတင်နိုင်ပါတယ်။"
     )
-    
-    await update.message.reply_text(
-        message, 
-        reply_markup=reply_markup, 
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
 
 async def current_raffle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/current_raffle command: လက်ရှိ ကံစမ်းမဲ အခြေအနေ ပြသခြင်း"""
     if not raffle_state["is_active"]:
         await update.message.reply_text("❌ လက်ရှိ လည်ပတ်နေသော ကံစမ်းမဲ မရှိပါ။")
         return
@@ -117,12 +93,9 @@ async def current_raffle_command(update: Update, context: ContextTypes.DEFAULT_T
         f"🎁 **ဆု:** {raffle_state['prize']}\n"
         f"👥 **ပါဝင်သူ စုစုပေါင်း:** {len(raffle_state['participants'])} ဦး"
     )
-    
     await update.message.reply_text(message, parse_mode="Markdown")
 
 async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/register command: User ကို Database တွင် မှတ်ပုံတင်ခြင်း"""
-    
     user_id = update.effective_user.id
     username = update.effective_user.username or "N/A"
     full_name = update.effective_user.full_name
@@ -138,26 +111,20 @@ async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.message.reply_text("✅ သင်သည် မှတ်ပုံတင်ပြီးသား ဖြစ်ပါသည်။")
 
 # --- 5. Admin Command Handlers ---
-
 async def admin_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/admin_menu command: Admin Dashboard ကို Inline Keyboard ဖြင့် ပြသခြင်း"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("🚫 သင့်တွင် Admin အသုံးပြုခွင့်မရှိပါ။")
         return
     
     message = "👑 **Admin လုပ်ဆောင်ချက်များ:**"
-    
-    # 💡 Admin အတွက် Inline Keyboard ကို သုံးခြင်း
     buttons = [
         [InlineKeyboardButton("🎁 ကံစမ်းမဲ အသစ် စတင်ရန်", callback_data='admin_create_raffle_prompt')],
         [InlineKeyboardButton("🗳️ ကံထူးရှင် ရွေးရန်", callback_data='admin_pick_winner')]
     ]
     reply_markup = InlineKeyboardMarkup(buttons)
-
     await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
 
 async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/create_raffle command ကိုင်တွယ်ခြင်း"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("🚫 သင့်တွင် Admin အသုံးပြုခွင့်မရှိပါ။")
         return
@@ -169,8 +136,8 @@ async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         prize = " ".join(context.args)
         if not prize:
-             await update.message.reply_text("❌ ကျေးဇူးပြု၍ ဆုကို ထည့်ပါ။ ဥပမာ: `/create_raffle iPhone 16 Pro`")
-             return
+            await update.message.reply_text("❌ ကျေးဇူးပြု၍ ဆုကို ထည့်ပါ။ ဥပမာ: `/create_raffle iPhone 16 Pro`")
+            return
     except IndexError:
         return
 
@@ -178,14 +145,12 @@ async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TY
     raffle_state["prize"] = prize
     raffle_state["participants"].clear()
 
-    # 💡 UI: Join Button ပါသော ကြေညာစာသားကို Inline Keyboard ဖြင့် ပို့ပေးခြင်း
     message = (
         f"🎉 **ကံစမ်းမဲ စတင်ပါပြီ!** 🎉\n\n"
         f"🎁 **ဆု:** {raffle_state['prize']}\n"
         f"👥 **လက်ရှိ ပါဝင်သူ:** {len(raffle_state['participants'])} ဦး\n\n"
         "ပါဝင်ဖို့အတွက် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
     )
-    
     await context.bot.send_message(
         chat_id=update.effective_chat.id, 
         text=message, 
@@ -193,10 +158,8 @@ async def create_raffle_command(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode="Markdown"
     )
 
-# --- 6. Callback Query Handlers (Inline Button Actions) ---
-
+# --- 6. Callback Query Handlers ---
 async def handle_admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin Menu ကနေ Action တွေကို စီမံခန့်ခွဲခြင်း"""
     query = update.callback_query
     await query.answer()
 
@@ -204,7 +167,6 @@ async def handle_admin_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     data = query.data
-    
     if data == 'admin_create_raffle_prompt':
         await query.edit_message_text(
             "📝 **ဆုကို ရိုက်ထည့်ပါ:**\n\n"
@@ -215,7 +177,6 @@ async def handle_admin_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         await pick_winner_handler(update, context, is_callback=True)
 
 async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Join Raffle Button ကို နှိပ်တဲ့အခါ ကိုင်တွယ်ခြင်း"""
     query = update.callback_query
     await query.answer()
 
@@ -224,25 +185,21 @@ async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     user_id = query.from_user.id
-    
     with get_db() as db:
         if not db.query(User).filter(User.id == user_id).first():
-            await query.answer("🛑 ကံစမ်းမဲမပါဝင်မီ /register ဖြင့် မှတ်ပုံတင်ရန် လိုအပ်ပါသည်။", show_alert=True)
+            await query.answer("🛑 ကံစမ်းမဲမပါဝင်မီ /register ဖြင့် မှတ်ပုံတင်ရန် လိုအပ်ပါသည်။", show_alert=True)
             return
 
     if user_id in raffle_state["participants"]:
         await query.answer("✅ သင် ပါဝင်ပြီးသား ဖြစ်ပါသည်။", show_alert=True)
     else:
         raffle_state["participants"].add(user_id)
-        
-        # 💡 Message ကို update လုပ်ပြီး ပါဝင်သူအရေအတွက်ကို ပြောင်းလဲပြခြင်း
         new_text = (
             f"🎉 **ကံစမ်းမဲ စတင်ပါပြီ!** 🎉\n\n"
             f"🎁 **ဆု:** {raffle_state['prize']}\n"
             f"👥 **လက်ရှိ ပါဝင်သူ:** {len(raffle_state['participants'])} ဦး\n\n"
             "ပါဝင်ဖို့အတွက် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
         )
-        
         await query.edit_message_text(
             new_text, 
             reply_markup=get_join_inline_keyboard(), 
@@ -250,44 +207,34 @@ async def handle_join_raffle(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         await query.answer("✨ ပါဝင်ခြင်း အောင်မြင်ပါသည်။ ကံကောင်းပါစေ!", show_alert=True)
 
-
 async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False) -> None:
-    """ကံထူးရှင် ရွေးချယ်ခြင်း"""
-    
     user_id = update.effective_user.id if not is_callback else update.callback_query.from_user.id
 
     if not is_admin(user_id):
-        # Admin မဟုတ်ရင် ပြန်ထွက်
         return
 
     if not raffle_state["is_active"]:
         message = "❌ ကံစမ်းမဲ မစတင်ရသေးပါ။"
-    
         if is_callback:
-             await update.callback_query.edit_message_text(message)
+            await update.callback_query.edit_message_text(message)
         else:
-             await update.message.reply_text(message)
+            await update.message.reply_text(message)
         return
 
     participants = list(raffle_state["participants"])
-
     if len(participants) == 0:
         message = "😢 ပါဝင်သူ မရှိ၍ ကံထူးရှင် ရွေးချယ်နိုင်ခြင်း မရှိပါ။"
     else:
         winner_id = random.choice(participants)
-        
         with get_db() as db:
             winner_user = db.query(User).filter(User.id == winner_id).first()
-            # Winner ကို Mention လုပ်နိုင်ရန်
             winner_mention = f"[{winner_user.full_name}](tg://user?id={winner_id})" if winner_user else f"User ID: {winner_id}"
-        
         message = (
             f"👑 **ကံထူးရှင် ရွေးချယ်ခြင်း ပြီးဆုံးပါပြီ!** 👑\n\n"
             f"🎉 **ကံထူးရှင်:** {winner_mention}\n"
             f"🎁 **ဆု:** {raffle_state['prize']}"
         )
 
-    # ကံစမ်းမဲကို ပြန်ပိတ်ပြီး state ရှင်းခြင်း
     raffle_state["is_active"] = False
     raffle_state["prize"] = None
     raffle_state["participants"].clear()
@@ -297,69 +244,73 @@ async def pick_winner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await update.message.reply_text(message, parse_mode="Markdown")
 
+# --- 7. Application Setup & Webhook (FINAL FIX: GUNICORN COMPATIBLE) ---
 
-# --- 7. Application Setup & Webhook (FINAL WORKING FIX) ---
+# 🚨 FIX 1: Application ကို Global မှာ None သတ်မှတ်ပါ (Worker Initialization အတွက်) 🚨
+application = None
 
-# Hardcoded BOT_TOKEN ကို သုံးခြင်း
-application = Application.builder().token(BOT_TOKEN).build()
-
-# Command Handlers (Dashboard Command များ)
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("register", register_command))
-application.add_handler(CommandHandler("current_raffle", current_raffle_command))
-application.add_handler(CommandHandler("admin_menu", admin_menu_command))
-application.add_handler(CommandHandler("create_raffle", create_raffle_command))
-application.add_handler(CommandHandler("pick_winner", pick_winner_handler))
-
-
-# Callback Query Handlers (Inline Button Actions)
-application.add_handler(CallbackQueryHandler(handle_join_raffle, pattern='^join_raffle$'))
-application.add_handler(CallbackQueryHandler(handle_admin_actions, pattern='^admin_create_raffle_prompt$|^admin_pick_winner$'))
-
-
-# Flask Web Server & Webhook 
+# Flask App
 flask_app = Flask(__name__)
-
 
 @flask_app.route('/')
 def home():
     return "Bot is running!", 200
 
-# 🚨 FIX: Webhook Handler ကို ပြန်လည်ပြင်ဆင်ခြင်း (Runtime Error ရှောင်ရန်) 🚨
-@flask_app.route(f'/{BOT_TOKEN}', methods=['POST']) 
-def webhook_handler(): 
+# 🚨 FIX 2: Webhook Handler - Request ဝင်လာချိန်မှာ Application Initialize လုပ်ခြင်း 🚨
+@flask_app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook_handler():
+    """Webhook handler with proper initialization logic for Gunicorn workers."""
+    global application # Global application variable ကို သုံးပါ
+    
     if request.method == "POST":
         try:
             json_data = request.get_json(force=True)
             
-            # 🚨 FIX 1: Initialization ကို RuntimeError မတက်အောင် try/except ထဲမှာ Run ပါ 🚨
-            if not application.updater and not application.job_queue:
-                try:
-                    # Gunicorn မှာ Event Loop မရှိသေးရင် Initialize လုပ်ရန်
-                    asyncio.run(application.initialize())
-                    print("INFO: Bot Initialized!") 
-                except RuntimeError:
-                    # 'Event loop is already running' error တက်ရင် pass လုပ်ပြီးဆက်သွားပါ
-                    print("INFO: Initialization skipped (RuntimeError: Loop already running).")
-                    pass
-            
-            # 🚨 FIX 2: Update Process ကို asyncio.run ဖြင့် ကိုင်တွယ်ခြင်း 🚨
+            # 🚨 Initialization Check & Setup: Worker တိုင်း Request ဝင်လာချိန်မှာ လုပ်ရမည့် အရာများ 🚨
+            # application မရှိသေးရင် အသစ်ပြန် build လုပ်ပြီး initialize လုပ်ပါ။
+            if application is None:
+                application = Application.builder().token(BOT_TOKEN).build()
+                
+                # Handlers တွေကို ထပ်ထည့်ပါ
+                application.add_handler(CommandHandler("start", start))
+                application.add_handler(CommandHandler("register", register_command))
+                application.add_handler(CommandHandler("current_raffle", current_raffle_command))
+                application.add_handler(CommandHandler("admin_menu", admin_menu_command))
+                application.add_handler(CommandHandler("create_raffle", create_raffle_command))
+                application.add_handler(CommandHandler("pick_winner", pick_winner_handler))
+                application.add_handler(CallbackQueryHandler(handle_join_raffle, pattern='^join_raffle$'))
+                application.add_handler(CallbackQueryHandler(handle_admin_actions, pattern='^admin_create_raffle_prompt$|^admin_pick_winner$'))
+                
+                # Application.initialize() ကို ခေါ်ယူခြင်း
+                async def worker_initialize():
+                    await application.initialize()
+                    # Webhook URL ကို တစ်ခါတည်း set လုပ်ပါ (Optional: Error ရှောင်ရန်)
+                    await application.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}") 
+                    print(f"INFO: Worker Application Initialized! Webhook set to {WEBHOOK_URL}/{BOT_TOKEN}")
+                
+                # Initialization ကို asyncio.run ဖြင့် ခေါ်ယူပါ (Gunicorn Sync Worker အတွက်)
+                asyncio.run(worker_initialize())
+
+            # Update ကို Process လုပ်ရန်
             async def process_update_async():
                 update = Update.de_json(json_data, application.bot)
                 await application.process_update(update)
 
-            # Update ကို Process လုပ်ရန်
+            # Update Process ကို asyncio.run ဖြင့် ကိုင်တွယ်ခြင်း
             asyncio.run(process_update_async())
             
         except Exception as e:
-            # Update.de_json error or general error
+            # Initialization error or update processing error 
+            # 🚨 Initialization error ဖြစ်ခဲ့ရင်လည်း Telegram ကို 200 OK ပြန်ပေးရပါမည်။
             print(f"CRITICAL ERROR in Flask Handler: {e}")
-            return jsonify({'status': 'CRITICAL ERROR'}), 200 
+            return jsonify({'status': 'CRITICAL ERROR', 'message': str(e)}), 200 
             
-    # Telegram ကို 500 Error မပြန်မိစေဖို့ 200 OK ကို အမြဲပြန်ပေးပါ။
     return jsonify({'status': 'ok'}), 200
 
 
+# 🚨 FIX 3: if __name__ == '__main__': အောက်က Initialization Logic ကို ဖယ်ရှားခြင်း 🚨
+# Gunicorn ကို Start Command မှာ သုံးထားသည့်အတွက် Flask App ကိုသာ တိုက်ရိုက် run ပါ။
 if __name__ == '__main__':
-    # Render မှာ gunicorn ကို Start Command မှာ သုံးထားသည်။
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    # Local မှာ စမ်းသပ်ရင် ဒီက run ပါမည်
+    flask_app.run(host="0.0.0.0", port=port, debug=False)
