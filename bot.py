@@ -1,3 +1,6 @@
+import logging
+import sqlite3
+from datetime import datetime
 from telegram import (
     Update, 
     InlineKeyboardButton, 
@@ -7,17 +10,20 @@ from telegram import (
     ReplyKeyboardRemove
 )
 from telegram.ext import (
-    Application, 
+    Updater, 
     CommandHandler, 
     CallbackQueryHandler, 
     MessageHandler, 
-    ContextTypes, 
-    filters,
-    ConversationHandler
+    Filters,
+    ConversationHandler,
+    CallbackContext
 )
-from telegram.constants import ParseMode
-import sqlite3
-from datetime import datetime
+
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # Bot Token and Admin Settings
 BOT_TOKEN = "8444084929:AAEIkrCAeuNjSHVUCYE9AEpg6IFqE52rNxc"
@@ -188,7 +194,7 @@ def get_main_reply_keyboard():
         ["🎰 ကံစမ်းမဲ ဝယ်ယူရန်", "🏆 ဆုကြေးများကြည့်ရန်"],
         ["💵 ငွေသွင်းရန်", "💰 ငွေထုတ်ရန်"],
         ["👤 ကျွန်တော့်ပရိုဖိုင်", "📊 ရလဒ်များကြည့်ရန်"]
-    ], resize_keyboard=True, persistent=True)
+    ], resize_keyboard=True)
 
 def get_admin_reply_keyboard():
     return ReplyKeyboardMarkup([
@@ -196,12 +202,12 @@ def get_admin_reply_keyboard():
         ["💳 ငွေသွင်းမှုများ", "💸 ငွေထုတ်မှုများ"],
         ["🏆 ဆုကြေးများ", "⚙️ ဆက်တင်များ"],
         ["🏠 Main Menu"]
-    ], resize_keyboard=True, persistent=True)
+    ], resize_keyboard=True)
 
 # ==============================
 # SIMPLE START COMMAND
 # ==============================
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start_command(update: Update, context: CallbackContext):
     user = update.effective_user
     
     # Create user if not exists
@@ -213,75 +219,76 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.conn.commit()
     
     if user.id in ADMIN_USERS:
-        await update.message.reply_text(
+        update.message.reply_text(
             "👨‍💼 *Admin Panel* သို့ ကြိုဆိုပါတယ်",
             reply_markup=get_admin_reply_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode='Markdown'
         )
     else:
-        await update.message.reply_text(
+        update.message.reply_text(
             "🎰 *LUCKY DRAW MYANMAR* မှ ကြိုဆိုပါတယ်!\n\n"
             "အောက်ပါခလုတ်များဖြင့် စတင်အသုံးပြုနိုင်ပါသည်။",
             reply_markup=get_main_reply_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode='Markdown'
         )
 
 # ==============================
 # DEPOSIT SYSTEM
 # ==============================
-async def handle_deposit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+def handle_deposit_start(update: Update, context: CallbackContext):
+    update.message.reply_text(
         "💵 *ငွေသွင်းရန်*\n\nကျေးဇူးပြု၍ သင့်အမည်ထည့်ပါ:",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode='Markdown'
     )
     return DEPOSIT_NAME
 
-async def handle_deposit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_deposit_name(update: Update, context: CallbackContext):
     context.user_data['deposit_name'] = update.message.text
-    await update.message.reply_text(
+    update.message.reply_text(
         "📞 *ကျေးဇူးပြု၍ သင့်ဖုန်းနံပါတ်ထည့်ပါ:*\nဥပမာ: 09123456789",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode='Markdown'
     )
     return DEPOSIT_PHONE
 
-async def handle_deposit_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_deposit_phone(update: Update, context: CallbackContext):
     phone = update.message.text
     if not phone.startswith('09') or len(phone) != 11:
-        await update.message.reply_text("❌ ဖုန်းနံပါတ် မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ပြန်ထည့်ပါ။")
+        update.message.reply_text("❌ ဖုန်းနံပါတ် မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ပြန်ထည့်ပါ။")
         return DEPOSIT_PHONE
     
     context.user_data['deposit_phone'] = phone
-    await update.message.reply_text(
+    update.message.reply_text(
         "💰 *သွင်းလိုသောငွေပမာဏ ထည့်ပါ:*\nဥပမာ: 10000",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode='Markdown'
     )
     return DEPOSIT_AMOUNT
 
-async def handle_deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_deposit_amount(update: Update, context: CallbackContext):
     try:
         amount = int(update.message.text)
         if amount < 1000:
-            await update.message.reply_text("❌ အနည်းဆုံး 1000 ကျပ် သွင်းရန် လိုအပ်ပါသည်။")
+            update.message.reply_text("❌ အနည်းဆုံး 1000 ကျပ် သွင်းရန် လိုအပ်ပါသည်။")
             return DEPOSIT_AMOUNT
         
         context.user_data['deposit_amount'] = amount
-        await update.message.reply_text(
+        update.message.reply_text(
             "📸 *ကျေးဇူးပြု၍ ငွေလွှဲပြီး Screenshot ပို့ပါ:*\n\n"
             f"📱 KPay: {SYSTEM_SETTINGS['kpay_phone']} ({SYSTEM_SETTINGS['kpay_name']})\n"
             f"💙 WavePay: {SYSTEM_SETTINGS['wavepay_phone']} ({SYSTEM_SETTINGS['wavepay_name']})",
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode='Markdown'
         )
         return DEPOSIT_SCREENSHOT
     except ValueError:
-        await update.message.reply_text("❌ ငွေပမာဏ မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ဂဏန်းဖြင့်ထည့်ပါ။")
+        update.message.reply_text("❌ ငွေပမာဏ မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ဂဏန်းဖြင့်ထည့်ပါ။")
         return DEPOSIT_AMOUNT
 
-async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_deposit_screenshot(update: Update, context: CallbackContext):
     if not update.message.photo:
-        await update.message.reply_text("❌ ကျေးဇူးပြု၍ Screenshot ပုံတစ်ပုံ ပို့ပါ။")
+        update.message.reply_text("❌ ကျေးဇူးပြု၍ Screenshot ပုံတစ်ပုံ ပို့ပါ။")
         return DEPOSIT_SCREENSHOT
     
-    photo_file = await update.message.photo[-1].get_file()
+    # Get the largest photo
+    photo_file = update.message.photo[-1].get_file()
     file_id = photo_file.file_id
     
     user_id = update.effective_user.id
@@ -293,18 +300,18 @@ async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAUL
         screenshot_file_id=file_id
     )
     
-    await update.message.reply_text(
+    update.message.reply_text(
         f"✅ *ငွေသွင်းမှု လက်ခံရရှိပါသည်!*\n\n"
         f"📝 အမည်: {context.user_data['deposit_name']}\n"
         f"📞 ဖုန်း: {context.user_data['deposit_phone']}\n"
         f"💰 ပမာဏ: {context.user_data['deposit_amount']} Ks\n\n"
         f"⏳ Admin မှ အတည်ပြုပြီးမှ Balance တက်မည်။",
         reply_markup=get_main_reply_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode='Markdown'
     )
     
     # Notify admins
-    await notify_admins_about_deposit(
+    notify_admins_about_deposit(
         context.bot, deposit_id, user_id,
         context.user_data['deposit_name'],
         context.user_data['deposit_phone'],
@@ -318,14 +325,14 @@ async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAUL
 # ==============================
 # WITHDRAW SYSTEM
 # ==============================
-async def handle_withdraw_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+def handle_withdraw_start(update: Update, context: CallbackContext):
+    update.message.reply_text(
         "💰 *ငွေထုတ်ရန်*\n\nကျေးဇူးပြု၍ သင့်အမည်ထည့်ပါ:",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode='Markdown'
     )
     return WITHDRAW_NAME
 
-async def handle_withdraw_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_withdraw_name(update: Update, context: CallbackContext):
     context.user_data['withdraw_name'] = update.message.text
     
     keyboard = ReplyKeyboardMarkup([
@@ -333,46 +340,46 @@ async def handle_withdraw_name(update: Update, context: ContextTypes.DEFAULT_TYP
         ["🔙 နောက်သို့"]
     ], resize_keyboard=True, one_time_keyboard=True)
     
-    await update.message.reply_text(
+    update.message.reply_text(
         "💳 *ငွေလွှဲနည်းလမ်း ရွေးချယ်ပါ:*",
         reply_markup=keyboard,
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode='Markdown'
     )
     return WITHDRAW_METHOD
 
-async def handle_withdraw_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_withdraw_method(update: Update, context: CallbackContext):
     method = update.message.text
     if method not in ["📱 KPay", "💙 WavePay"]:
-        await update.message.reply_text("❌ ကျေးဇူးပြု၍ ငွေလွှဲနည်းလမ်း ရွေးချယ်ပါ။")
+        update.message.reply_text("❌ ကျေးဇူးပြု၍ ငွေလွှဲနည်းလမ်း ရွေးချယ်ပါ။")
         return WITHDRAW_METHOD
     
     context.user_data['withdraw_method'] = "KPay" if method == "📱 KPay" else "WavePay"
     
-    await update.message.reply_text(
+    update.message.reply_text(
         f"📞 *{context.user_data['withdraw_method']} ဖုန်းနံပါတ် ထည့်ပါ:*\nဥပမာ: 09123456789",
         reply_markup=ReplyKeyboardRemove(),
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode='Markdown'
     )
     return WITHDRAW_PHONE
 
-async def handle_withdraw_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_withdraw_phone(update: Update, context: CallbackContext):
     phone = update.message.text
     if not phone.startswith('09') or len(phone) != 11:
-        await update.message.reply_text("❌ ဖုန်းနံပါတ် မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ပြန်ထည့်ပါ။")
+        update.message.reply_text("❌ ဖုန်းနံပါတ် မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ပြန်ထည့်ပါ။")
         return WITHDRAW_PHONE
     
     context.user_data['withdraw_phone'] = phone
-    await update.message.reply_text(
+    update.message.reply_text(
         "💰 *ထုတ်လိုသောငွေပမာဏ ထည့်ပါ:*\nဥပမာ: 10000\n\n⚠️ အနည်းဆုံး 1000 ကျပ်",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode='Markdown'
     )
     return WITHDRAW_AMOUNT
 
-async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_withdraw_amount(update: Update, context: CallbackContext):
     try:
         amount = int(update.message.text)
         if amount < 1000:
-            await update.message.reply_text("❌ အနည်းဆုံး 1000 ကျပ် ထုတ်ရန် လိုအပ်ပါသည်။")
+            update.message.reply_text("❌ အနည်းဆုံး 1000 ကျပ် ထုတ်ရန် လိုအပ်ပါသည်။")
             return WITHDRAW_AMOUNT
         
         user_id = update.effective_user.id
@@ -382,7 +389,7 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
         user_balance = result[0] if result else 0
         
         if amount > user_balance:
-            await update.message.reply_text(
+            update.message.reply_text(
                 f"❌ သင့်လက်ကျန်ငွေ မလုံလောက်ပါ။\n"
                 f"💳 လက်ကျန်ငွေ: {user_balance} Ks\n"
                 f"💰 ထုတ်လိုငွေ: {amount} Ks"
@@ -397,7 +404,7 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
             amount=amount
         )
         
-        await update.message.reply_text(
+        update.message.reply_text(
             f"✅ *ငွေထုတ်မှု လက်ခံရရှိပါသည်!*\n\n"
             f"📝 အမည်: {context.user_data['withdraw_name']}\n"
             f"💳 နည်းလမ်း: {context.user_data['withdraw_method']}\n"
@@ -405,10 +412,10 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
             f"💰 ပမာဏ: {amount} Ks\n\n"
             f"⏳ Admin မှ အတည်ပြုပြီးမှ ငွေထုတ်ပေးမည်။",
             reply_markup=get_main_reply_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode='Markdown'
         )
         
-        await notify_admins_about_withdraw(
+        notify_admins_about_withdraw(
             context.bot, withdraw_id, user_id,
             context.user_data['withdraw_name'],
             context.user_data['withdraw_method'],
@@ -420,13 +427,13 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
         
     except ValueError:
-        await update.message.reply_text("❌ ငွေပမာဏ မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ဂဏန်းဖြင့်ထည့်ပါ။")
+        update.message.reply_text("❌ ငွေပမာဏ မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ဂဏန်းဖြင့်ထည့်ပါ။")
         return WITHDRAW_AMOUNT
 
 # ==============================
 # ADMIN NOTIFICATIONS
 # ==============================
-async def notify_admins_about_deposit(bot, deposit_id, user_id, name, phone, amount, screenshot_file_id):
+def notify_admins_about_deposit(bot, deposit_id, user_id, name, phone, amount, screenshot_file_id):
     message_text = f"""
 🚨 *အသစ်ငွေသွင်းမှု* 🚨
 
@@ -446,17 +453,17 @@ async def notify_admins_about_deposit(bot, deposit_id, user_id, name, phone, amo
     
     for admin_id in ADMIN_USERS:
         try:
-            await bot.send_photo(
+            bot.send_photo(
                 chat_id=admin_id,
                 photo=screenshot_file_id,
                 caption=message_text,
                 reply_markup=keyboard,
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode='Markdown'
             )
         except Exception as e:
             print(f"Failed to notify admin {admin_id}: {e}")
 
-async def notify_admins_about_withdraw(bot, withdraw_id, user_id, name, method, phone, amount):
+def notify_admins_about_withdraw(bot, withdraw_id, user_id, name, method, phone, amount):
     message_text = f"""
 🚨 *အသစ်ငွေထုတ်မှု* 🚨
 
@@ -477,11 +484,11 @@ async def notify_admins_about_withdraw(bot, withdraw_id, user_id, name, method, 
     
     for admin_id in ADMIN_USERS:
         try:
-            await bot.send_message(
+            bot.send_message(
                 chat_id=admin_id,
                 text=message_text,
                 reply_markup=keyboard,
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode='Markdown'
             )
         except Exception as e:
             print(f"Failed to notify admin {admin_id}: {e}")
@@ -489,15 +496,15 @@ async def notify_admins_about_withdraw(bot, withdraw_id, user_id, name, method, 
 # ==============================
 # ADMIN PANEL HANDLERS
 # ==============================
-async def handle_deposit_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_deposit_management(update: Update, context: CallbackContext):
     if update.effective_user.id not in ADMIN_USERS:
-        await update.message.reply_text("❌ Admin access required")
+        update.message.reply_text("❌ Admin access required")
         return
     
     pending_deposits = db.get_pending_deposits()
     
     if not pending_deposits:
-        await update.message.reply_text("✅ စောင့်ဆိုင်းနေသော ငွေသွင်းမှုမရှိပါ။")
+        update.message.reply_text("✅ စောင့်ဆိုင်းနေသော ငွေသွင်းမှုမရှိပါ။")
         return
     
     message_text = f"💳 *စောင့်ဆိုင်းနေသော ငွေသွင်းမှုများ - {len(pending_deposits)} ခု*\n\n"
@@ -507,17 +514,17 @@ async def handle_deposit_management(update: Update, context: ContextTypes.DEFAUL
         message_text += f"🆔 #{deposit_id} | {name} | {amount} Ks\n"
         message_text += f"📞 {phone} | 📅 {created_at[:16]}\n\n"
     
-    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(message_text, parse_mode='Markdown')
 
-async def handle_withdraw_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_withdraw_management(update: Update, context: CallbackContext):
     if update.effective_user.id not in ADMIN_USERS:
-        await update.message.reply_text("❌ Admin access required")
+        update.message.reply_text("❌ Admin access required")
         return
     
     pending_withdraws = db.get_pending_withdraws()
     
     if not pending_withdraws:
-        await update.message.reply_text("✅ စောင့်ဆိုင်းနေသော ငွေထုတ်မှုမရှိပါ။")
+        update.message.reply_text("✅ စောင့်ဆိုင်းနေသော ငွေထုတ်မှုမရှိပါ။")
         return
     
     message_text = f"💸 *စောင့်ဆိုင်းနေသော ငွေထုတ်မှုများ - {len(pending_withdraws)} ခု*\n\n"
@@ -528,17 +535,17 @@ async def handle_withdraw_management(update: Update, context: ContextTypes.DEFAU
         message_text += f"💳 {method} | 📞 {phone}\n"
         message_text += f"📅 {created_at[:16]}\n\n"
     
-    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(message_text, parse_mode='Markdown')
 
 # ==============================
 # ADMIN APPROVAL HANDLERS
 # ==============================
-async def handle_admin_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_admin_approval(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     
     if query.from_user.id not in ADMIN_USERS:
-        await query.message.reply_text("❌ Admin access required")
+        query.message.reply_text("❌ Admin access required")
         return
     
     data = query.data
@@ -546,66 +553,66 @@ async def handle_admin_approval(update: Update, context: ContextTypes.DEFAULT_TY
     if data.startswith('approve_deposit_'):
         deposit_id = int(data.split('_')[2])
         db.update_deposit_status(deposit_id, 'approved', query.from_user.id)
-        await query.edit_message_caption(
+        query.edit_message_caption(
             caption=query.message.caption + f"\n\n✅ *အတည်ပြုပြီးပါပြီ!*\n👨‍💼 Admin: {query.from_user.first_name}",
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode='Markdown'
         )
         
     elif data.startswith('reject_deposit_'):
         deposit_id = int(data.split('_')[2])
         db.update_deposit_status(deposit_id, 'rejected', query.from_user.id, "ပယ်ဖျက်ထားသည်")
-        await query.edit_message_caption(
+        query.edit_message_caption(
             caption=query.message.caption + f"\n\n❌ *ပယ်ဖျက်ပြီးပါပြီ!*\n👨‍💼 Admin: {query.from_user.first_name}",
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode='Markdown'
         )
         
     elif data.startswith('approve_withdraw_'):
         withdraw_id = int(data.split('_')[2])
         db.update_withdraw_status(withdraw_id, 'approved', query.from_user.id)
-        await query.edit_message_text(
+        query.edit_message_text(
             text=query.message.text + f"\n\n✅ *အတည်ပြုပြီးပါပြီ!*\n👨‍💼 Admin: {query.from_user.first_name}",
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode='Markdown'
         )
         
     elif data.startswith('reject_withdraw_'):
         withdraw_id = int(data.split('_')[2])
         db.update_withdraw_status(withdraw_id, 'rejected', query.from_user.id, "ပယ်ဖျက်ထားသည်")
-        await query.edit_message_text(
+        query.edit_message_text(
             text=query.message.text + f"\n\n❌ *ပယ်ဖျက်ပြီးပါပြီ!*\n👨‍💼 Admin: {query.from_user.first_name}",
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode='Markdown'
         )
 
 # ==============================
 # MAIN HANDLER
 # ==============================
-async def handle_reply_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_reply_buttons(update: Update, context: CallbackContext):
     text = update.message.text
     user_id = update.effective_user.id
     
     if user_id in ADMIN_USERS:
         if text == "💳 ငွေသွင်းမှုများ":
-            await handle_deposit_management(update, context)
+            handle_deposit_management(update, context)
             return
         elif text == "💸 ငွေထုတ်မှုများ":
-            await handle_withdraw_management(update, context)
+            handle_withdraw_management(update, context)
             return
         elif text == "🏠 Main Menu":
-            await start_command(update, context)
+            start_command(update, context)
             return
     
     if text == "💵 ငွေသွင်းရန်":
-        await handle_deposit_start(update, context)
+        handle_deposit_start(update, context)
     elif text == "💰 ငွေထုတ်ရန်":
-        await handle_withdraw_start(update, context)
+        handle_withdraw_start(update, context)
     elif text == "🏆 ဆုကြေးများကြည့်ရန်":
-        await show_prizes(update, context)
+        show_prizes(update, context)
     elif text == "👤 ကျွန်တော့်ပရိုဖိုင်":
-        await show_profile(update, context)
+        show_profile(update, context)
 
 # ==============================
 # SIMPLE PLACEHOLDER FUNCTIONS
 # ==============================
-async def show_prizes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def show_prizes(update: Update, context: CallbackContext):
     prize_text = """
 🏆 *LUCKY DRAW MYANMAR - ဆုကြေးများ* 🏆
 
@@ -618,9 +625,9 @@ async def show_prizes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 တစ်ကြိမ်လျှင် 1000 ကျပ်
 ⏰ နေ့စဉ်ကံစမ်းမဲထွက်ချိန်: 18:00
 """
-    await update.message.reply_text(prize_text, parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(prize_text, parse_mode='Markdown')
 
-async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def show_profile(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     cursor = db.conn.cursor()
     cursor.execute("SELECT first_name, balance, tickets FROM users WHERE user_id = ?", (user_id,))
@@ -638,31 +645,31 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         profile_text = "👤 *သင့်ပရိုဖိုင်*\n\nအချက်အလက်များ မတွေ့ရှိပါ။"
     
-    await update.message.reply_text(profile_text, parse_mode=ParseMode.MARKDOWN)
+    update.message.reply_text(profile_text, parse_mode='Markdown')
 
 # ==============================
 # CONVERSATION HANDLERS
 # ==============================
 def get_deposit_conversation_handler():
     return ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^💵 ငွေသွင်းရန်$"), handle_deposit_start)],
+        entry_points=[MessageHandler(Filters.regex('^💵 ငွေသွင်းရန်$'), handle_deposit_start)],
         states={
-            DEPOSIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_deposit_name)],
-            DEPOSIT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_deposit_phone)],
-            DEPOSIT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_deposit_amount)],
-            DEPOSIT_SCREENSHOT: [MessageHandler(filters.PHOTO, handle_deposit_screenshot)],
+            DEPOSIT_NAME: [MessageHandler(Filters.text & ~Filters.command, handle_deposit_name)],
+            DEPOSIT_PHONE: [MessageHandler(Filters.text & ~Filters.command, handle_deposit_phone)],
+            DEPOSIT_AMOUNT: [MessageHandler(Filters.text & ~Filters.command, handle_deposit_amount)],
+            DEPOSIT_SCREENSHOT: [MessageHandler(Filters.photo, handle_deposit_screenshot)],
         },
         fallbacks=[]
     )
 
 def get_withdraw_conversation_handler():
     return ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^💰 ငွေထုတ်ရန်$"), handle_withdraw_start)],
+        entry_points=[MessageHandler(Filters.regex('^💰 ငွေထုတ်ရန်$'), handle_withdraw_start)],
         states={
-            WITHDRAW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_withdraw_name)],
-            WITHDRAW_METHOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_withdraw_method)],
-            WITHDRAW_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_withdraw_phone)],
-            WITHDRAW_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_withdraw_amount)],
+            WITHDRAW_NAME: [MessageHandler(Filters.text & ~Filters.command, handle_withdraw_name)],
+            WITHDRAW_METHOD: [MessageHandler(Filters.text & ~Filters.command, handle_withdraw_method)],
+            WITHDRAW_PHONE: [MessageHandler(Filters.text & ~Filters.command, handle_withdraw_phone)],
+            WITHDRAW_AMOUNT: [MessageHandler(Filters.text & ~Filters.command, handle_withdraw_amount)],
         },
         fallbacks=[]
     )
@@ -672,20 +679,22 @@ def get_withdraw_conversation_handler():
 # ==============================
 def main():
     try:
-        app = Application.builder().token(BOT_TOKEN).build()
+        updater = Updater(BOT_TOKEN)
+        dispatcher = updater.dispatcher
         
         # Add handlers
-        app.add_handler(CommandHandler("start", start_command))
-        app.add_handler(get_deposit_conversation_handler())
-        app.add_handler(get_withdraw_conversation_handler())
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply_buttons))
-        app.add_handler(CallbackQueryHandler(handle_admin_approval))
+        dispatcher.add_handler(CommandHandler("start", start_command))
+        dispatcher.add_handler(get_deposit_conversation_handler())
+        dispatcher.add_handler(get_withdraw_conversation_handler())
+        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_reply_buttons))
+        dispatcher.add_handler(CallbackQueryHandler(handle_admin_approval))
         
         print("🤖 LUCKY DRAW MYANMAR Bot starting...")
         print("✅ Payment System: Activated")
         print("👨‍💼 Admin Panel: Ready")
         
-        app.run_polling()
+        updater.start_polling()
+        updater.idle()
         
     except Exception as e:
         print(f"❌ Error starting bot: {e}")
