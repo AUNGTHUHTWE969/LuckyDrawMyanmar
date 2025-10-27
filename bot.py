@@ -1,333 +1,304 @@
-import os
-import logging
-import asyncio
-from datetime import datetime
-import random
-
-import psycopg2
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update, 
+    InlineKeyboardButton, 
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    KeyboardButton
+)
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, 
-    MessageHandler, filters, ContextTypes
+    Application, 
+    CommandHandler, 
+    CallbackQueryHandler, 
+    MessageHandler, 
+    ContextTypes, 
+    filters
 )
-from dotenv import load_dotenv
+from telegram.constants import ParseMode
 
-# Load environment variables
-load_dotenv()
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# ==============================
+# REPLY KEYBOARD (DESKBOARD BUTTONS)
+# ==============================
+def get_main_reply_keyboard():
+    """ပင်မရှေ့သို့/နောက်သို့ ခလုတ်များ"""
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🎰 ကံစမ်းမဲထုတ်မယ်"), KeyboardButton("📊 ရလဒ်ကြည့်မယ်")],
+        [KeyboardButton("👤 အကောင့်"), KeyboardButton("🏆 ဆုကြေးများ")],
+        [KeyboardButton("🆘 အကူအညီ"), KeyboardButton("⚙️ ဆက်တင်")]
+    ], resize_keyboard=True, persistent=True)
 
-class Config:
-    BOT_TOKEN = os.getenv('BOT_TOKEN')
-    ADMIN_IDS = [int(x) for x in os.getenv('ADMIN_IDS', '8070878424').split(',')]
-    DATABASE_URL = os.getenv('DATABASE_URL')
-    TICKET_PRICE = 1000
+def get_back_reply_keyboard():
+    """နောက်သို့ပြန်ရန် ခလုတ်"""
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🔙 နောက်သို့")]
+    ], resize_keyboard=True, persistent=True)
 
-class DatabaseManager:
-    def __init__(self):
-        self.connection = None
-        self.connect()
-        self.init_database()
+def get_auth_reply_keyboard():
+    """Login/Register ခလုတ်များ"""
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📝 အကောင့်အသစ်ဖွင့်မယ်"), KeyboardButton("🔐 အကောင့်ဝင်မယ်")],
+        [KeyboardButton("🔙 နောက်သို့")]
+    ], resize_keyboard=True, persistent=True)
+
+# ==============================
+# INLINE KEYBOARDS
+# ==============================
+def get_main_inline_keyboard():
+    """ပင်မ Inline ခလုတ်များ"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 စတင်ရန်", callback_data="get_started")],
+        [InlineKeyboardButton("📱 ဆက်သွယ်ရန်", url="https://t.me/youradmin")],
+        [InlineKeyboardButton("ℹ️ အကူအညီ", callback_data="help")]
+    ])
+
+def get_register_inline_keyboard():
+    """Register Inline ခလုတ်များ"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ အတည်ပြုမည်", callback_data="confirm_register")],
+        [InlineKeyboardButton("✏️ ပြန်လည်ပြင်ဆင်မည်", callback_data="edit_register")],
+        [InlineKeyboardButton("❌ ပယ်ဖျက်မည်", callback_data="cancel_register")]
+    ])
+
+def get_login_inline_keyboard():
+    """Login Inline ခလုတ်များ"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔐 OTP ရယူမည်", callback_data="get_otp")],
+        [InlineKeyboardButton("📧 လိပ်စာမေ့နေပါသလား", callback_data="forgot_email")],
+        [InlineKeyboardButton("🔑 လျှို့ဝှက်နံပါတ် မေ့နေပါသလား", callback_data="forgot_password")]
+    ])
+
+def get_navigation_inline_keyboard():
+    """ရှေ့သို့/နောက်သို့ Inline ခလုတ်များ"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⬅️ ရှေ့သို့", callback_data="prev_page"),
+            InlineKeyboardButton("➡️ နောက်သို့", callback_data="next_page")
+        ],
+        [InlineKeyboardButton("🏠 ပင်မစာမျက်နှာ", callback_data="main_menu")]
+    ])
+
+# ==============================
+# BOT HANDLERS - START & MAIN
+# ==============================
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """အစပြုခြင်း"""
+    user = update.effective_user
     
-    def connect(self):
-        """Connect to PostgreSQL database"""
-        try:
-            if Config.DATABASE_URL:
-                self.connection = psycopg2.connect(Config.DATABASE_URL, sslmode='require')
-                logger.info("✅ PostgreSQL database connected successfully")
-            else:
-                # Fallback to SQLite for local development
-                import sqlite3
-                self.connection = sqlite3.connect('lottery.db', check_same_thread=False)
-                logger.info("✅ SQLite database connected successfully")
-        except Exception as e:
-            logger.error(f"❌ Database connection failed: {e}")
-            raise
-    
-    def init_database(self):
-        """Initialize database tables"""
-        try:
-            cursor = self.connection.cursor()
-            
-            # Users table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    balance DECIMAL DEFAULT 0,
-                    join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            # Tickets table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS tickets (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT,
-                    amount DECIMAL,
-                    purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            self.connection.commit()
-            logger.info("✅ Database tables created successfully")
-            
-        except Exception as e:
-            logger.error(f"❌ Database initialization failed: {e}")
-            self.connection.rollback()
-    
-    def create_user(self, user_id: int, username: str, first_name: str):
-        """Create a new user"""
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute('''
-                INSERT INTO users (user_id, username, first_name)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id) DO NOTHING
-            ''', (user_id, username, first_name))
-            self.connection.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Error creating user: {e}")
-            return False
-    
-    def get_user(self, user_id: int):
-        """Get user by ID"""
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
-            return cursor.fetchone()
-        except Exception as e:
-            logger.error(f"Error getting user: {e}")
-            return None
-    
-    def update_balance(self, user_id: int, amount: float):
-        """Update user balance"""
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                "UPDATE users SET balance = balance + %s WHERE user_id = %s",
-                (amount, user_id)
-            )
-            self.connection.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Error updating balance: {e}")
-            self.connection.rollback()
-            return False
+    welcome_text = f"""
+┌─────────────────────────┐
+│    🎊 LUCKY DRAW MYANMAR   │
+└─────────────────────────┘
 
-class LotteryBot:
-    def __init__(self):
-        self.db = DatabaseManager()
-        self.application = None
+✨ *မင်္ဂလာပါ {user.first_name}!* ✨
+
+ကံစမ်းမဲကမ္ဘာထဲကို ကြိုဆိုပါတယ်။ 
+အောက်ပါခလုတ်များဖြင့် စတင်နိုင်ပါသည်။
+"""
     
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command"""
-        user = update.effective_user
-        
-        # Create user if not exists
-        self.db.create_user(user.id, user.username, user.first_name)
-        
-        user_data = self.db.get_user(user.id)
-        balance = user_data[3] if user_data else 0
-        
-        welcome_text = f"""
-🎉 **Lucky Draw Myanmar မှ ကြိုဆိုပါတယ်!**
-
-👋 မင်္ဂလာပါ {user.first_name}!
-
-**ကံစမ်းမဲအချက်အလက်:**
-🎫 ကံစမ်းမဲဈေး: {Config.TICKET_PRICE:,} ကျပ်
-💰 သင့်လက်ကျန်ငွေ: {balance:,.0f} ကျပ်
-
-ကျေးဇူးပြု၍ အောက်ပါ button များကိုနှိပ်၍ ဆက်လက်လုပ်ဆောင်ပါ
-
-#LUCKYDRAWMYANMAR
-        """
-        
-        await update.message.reply_text(
-            welcome_text,
-            parse_mode='Markdown',
-            reply_markup=self.get_main_menu(user.id)
-        )
+    # Inline buttons for quick actions
+    await update.message.reply_text(
+        welcome_text,
+        reply_markup=get_main_inline_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
     
-    def get_main_menu(self, user_id: int = None):
-        """Get main menu keyboard"""
-        keyboard = [
-            [InlineKeyboardButton("🎫 ကံစမ်းမဲဝယ်ယူရန်", callback_data="buy_ticket")],
-            [InlineKeyboardButton("💰 လက်ကျန်ငွေကြည့်ရန်", callback_data="check_balance")],
-            [InlineKeyboardButton("📊 ကိုယ်ရေးအချက်အလက်", callback_data="profile")]
-        ]
-        
-        return InlineKeyboardMarkup(keyboard)
+    # Reply keyboard for main navigation (always visible)
+    await update.message.reply_text(
+        "👇 *အောက်ပါခလုတ်များကို နှိပ်၍ ဆက်လက်လုပ်ဆောင်ပါ*",
+        reply_markup=get_main_reply_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# ==============================
+# REPLY KEYBOARD HANDLERS
+# ==============================
+async def handle_reply_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply keyboard buttons များကိုကိုင်တွယ်ခြင်း"""
+    text = update.message.text
     
-    def get_ticket_menu(self):
-        """Get ticket purchase menu"""
-        keyboard = [
-            [InlineKeyboardButton("1 ကံစမ်းမဲ", callback_data="buy_1")],
-            [InlineKeyboardButton("5 ကံစမ်းမဲ", callback_data="buy_5")],
-            [InlineKeyboardButton("10 ကံစမ်းမဲ", callback_data="buy_10")],
-            [InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]
-        ]
-        return InlineKeyboardMarkup(keyboard)
+    if text == "🎰 ကံစမ်းမဲထုတ်မယ်":
+        await handle_lottery_draw(update, context)
+    elif text == "📊 ရလဒ်ကြည့်မယ်":
+        await handle_view_results(update, context)
+    elif text == "👤 အကောင့်":
+        await handle_account(update, context)
+    elif text == "🏆 ဆုကြေးများ":
+        await handle_prizes(update, context)
+    elif text == "🆘 အကူအညီ":
+        await handle_help(update, context)
+    elif text == "⚙️ ဆက်တင်":
+        await handle_settings(update, context)
+    elif text == "🔙 နောက်သို့":
+        await handle_back(update, context)
+    elif text == "📝 အကောင့်အသစ်ဖွင့်မယ်":
+        await handle_register_start(update, context)
+    elif text == "🔐 အကောင့်ဝင်မယ်":
+        await handle_login_start(update, context)
+
+# ==============================
+# INLINE BUTTON HANDLERS
+# ==============================
+async def handle_inline_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inline buttons များကိုကိုင်တွယ်ခြင်း"""
+    query = update.callback_query
+    await query.answer()
     
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle callback queries"""
-        query = update.callback_query
-        await query.answer()
-        
-        user = query.from_user
-        data = query.data
-        
-        if data == "main_menu":
-            await query.edit_message_text(
-                "**မူလ Menu**\n\nကျေးဇူးပြု၍ ရွေးချယ်ပါ:",
-                parse_mode='Markdown',
-                reply_markup=self.get_main_menu(user.id)
-            )
-        
-        elif data == "buy_ticket":
-            await query.edit_message_text(
-                f"**ကံစမ်းမဲဝယ်ယူရန်**\n\n🎫 ကံစမ်းမဲတစ်ခုလျှင်: {Config.TICKET_PRICE:,} ကျပ်",
-                parse_mode='Markdown',
-                reply_markup=self.get_ticket_menu()
-            )
-        
-        elif data == "check_balance":
-            user_data = self.db.get_user(user.id)
-            balance = user_data[3] if user_data else 0
-            
-            await query.edit_message_text(
-                f"💰 **သင့်လက်ကျန်ငွေ**\n\nလက်ကျန်ငွေ: {balance:,.0f} ကျပ်",
-                parse_mode='Markdown',
-                reply_markup=self.get_main_menu(user.id)
-            )
-        
-        elif data == "profile":
-            user_data = self.db.get_user(user.id)
-            if user_data:
-                profile_text = f"""
-📊 **ကိုယ်ရေးအချက်အလက်**
-
-👤 အမည်: {user_data[2]}
-🆔 အိုင်ဒီ: {user_data[0]}
-💰 လက်ကျန်ငွေ: {user_data[3]:,.0f} ကျပ်
-📅 အကောင့်ဖွင့်သည့်ရက်: {user_data[4][:10] if user_data[4] else 'N/A'}
-
-#LUCKYDRAWMYANMAR
-                """
-                
-                await query.edit_message_text(
-                    profile_text,
-                    parse_mode='Markdown',
-                    reply_markup=self.get_main_menu(user.id)
-                )
-        
-        elif data.startswith("buy_"):
-            if data == "buy_1":
-                ticket_count = 1
-            elif data == "buy_5":
-                ticket_count = 5
-            elif data == "buy_10":
-                ticket_count = 10
-            else:
-                ticket_count = 1
-            
-            await self.process_ticket_purchase(user, ticket_count, query)
+    data = query.data
     
-    async def process_ticket_purchase(self, user, ticket_count: int, query):
-        """Process ticket purchase"""
-        try:
-            total_amount = ticket_count * Config.TICKET_PRICE
-            user_data = self.db.get_user(user.id)
-            
-            if not user_data:
-                await query.edit_message_text(
-                    "❌ User information not found. Please start the bot again.",
-                    reply_markup=self.get_main_menu(user.id)
-                )
-                return
-            
-            balance = user_data[3]
-            
-            if balance < total_amount:
-                await query.edit_message_text(
-                    f"❌ လက်ကျန်ငွေမလုံလောက်ပါ။\nလက်ရှိလက်ကျန်ငွေ: {balance:,.0f} ကျပ်\nလိုအပ်ငွေ: {total_amount:,.0f} ကျပ်",
-                    reply_markup=self.get_main_menu(user.id)
-                )
-                return
-            
-            # Update balance
-            self.db.update_balance(user.id, -total_amount)
-            
-            # Create ticket records
-            cursor = self.db.connection.cursor()
-            for _ in range(ticket_count):
-                cursor.execute(
-                    "INSERT INTO tickets (user_id, amount) VALUES (%s, %s)",
-                    (user.id, Config.TICKET_PRICE)
-                )
-            
-            self.db.connection.commit()
-            
-            # Get updated balance
-            user_data = self.db.get_user(user.id)
-            new_balance = user_data[3]
-            
-            success_message = f"""
-✅ ကံစမ်းမဲ {ticket_count} ခု ဝယ်ယူပြီးပါပြီ!
+    if data == "get_started":
+        await handle_get_started(query, context)
+    elif data == "help":
+        await handle_help_inline(query, context)
+    elif data == "confirm_register":
+        await handle_confirm_register(query, context)
+    elif data == "edit_register":
+        await handle_edit_register(query, context)
+    elif data == "cancel_register":
+        await handle_cancel_register(query, context)
+    elif data == "get_otp":
+        await handle_get_otp(query, context)
+    elif data == "forgot_email":
+        await handle_forgot_email(query, context)
+    elif data == "forgot_password":
+        await handle_forgot_password(query, context)
+    elif data == "prev_page":
+        await handle_prev_page(query, context)
+    elif data == "next_page":
+        await handle_next_page(query, context)
+    elif data == "main_menu":
+        await handle_main_menu(query, context)
 
-📊 အချက်အလက်များ:
-• ဝယ်ယူသောကံစမ်းမဲ: {ticket_count} ခု
-• ကံစမ်းမဲတစ်ခုဈေး: {Config.TICKET_PRICE:,} ကျပ်
-• စုစုပေါင်းကျသင့်ငွေ: {total_amount:,.0f} ကျပ်
-• လက်ကျန်ငွေ: {new_balance:,.0f} ကျပ်
+# ==============================
+# SPECIFIC HANDLERS
+# ==============================
+async def handle_get_started(query, context):
+    """စတင်ရန် inline button"""
+    await query.edit_message_text(
+        "🎯 *ကံစမ်းမဲစတင်ရန် ပြင်ဆင်ပြီးပါပြီ!*\n\n"
+        "အောက်ပါခလုတ်များမှ ရွေးချယ်နိုင်ပါသည်။",
+        reply_markup=get_auth_reply_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
-🎊 ကံကောင်းပါစေ!
+async def handle_register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Register စတင်ခြင်း"""
+    register_text = """
+┌─────────────────────────┐
+│   📝 အကောင့်အသစ်ဖွင့်ရန်   │
+└─────────────────────────┘
 
-#LUCKYDRAWMYANMAR
-            """
-            
-            await query.edit_message_text(
-                success_message,
-                parse_mode='Markdown',
-                reply_markup=self.get_main_menu(user.id)
-            )
-            
-        except Exception as e:
-            logger.error(f"Error processing ticket purchase: {e}")
-            await query.edit_message_text(
-                "❌ ကံစမ်းမဲဝယ်ယူရာတွင် အမှားဖြစ်နေသည်",
-                reply_markup=self.get_main_menu(user.id)
-            )
+*ကျေးဇူးပြု၍ သင့်အီးမေးလ်လိပ်စာထည့်ပါ:*
+"""
     
-    def setup_handlers(self):
-        """Setup bot handlers"""
-        self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CallbackQueryHandler(self.handle_callback))
-    
-    async def run(self):
-        """Run the bot"""
-        if not Config.BOT_TOKEN:
-            logger.error("BOT_TOKEN environment variable is required!")
-            return
-        
-        self.application = Application.builder().token(Config.BOT_TOKEN).build()
-        self.setup_handlers()
-        
-        logger.info("🤖 Bot is starting...")
-        await self.application.run_polling()
+    await update.message.reply_text(
+        register_text,
+        reply_markup=get_back_reply_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
-async def main():
-    """Main function"""
-    bot = LotteryBot()
-    await bot.run()
+async def handle_login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Login စတင်ခြင်း"""
+    login_text = """
+┌─────────────────────────┐
+│      🔐 အကောင့်ဝင်ရန်     │
+└─────────────────────────┘
+
+*ကျေးဇူးပြု၍ သင့်အီးမေးလ် (သို့) ဖုန်းနံပါတ်ထည့်ပါ:*
+"""
+    
+    await update.message.reply_text(
+        login_text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📱 OTP ဖြင့်ဝင်မည်", callback_data="get_otp")],
+            [InlineKeyboardButton("🔐 လျှို့ဝှက်နံပါတ်ဖြင့်ဝင်မည်", callback_data="password_login")]
+        ]),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def handle_lottery_draw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ကံစမ်းမဲထုတ်ခြင်း"""
+    await update.message.reply_text(
+        "🎰 *ကံစမ်းမဲထုတ်ယူခြင်း*\n\n"
+        "သင့်ကံစမ်းမဲဂဏန်းများ: 12 - 25 - 07 - 33 - 41 - 18\n\n"
+        "🍀 *ကံကောင်းပါစေ!*",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 နောက်တစ်ကြိမ်ထပ်ကံစမ်းမယ်", callback_data="draw_again")],
+            [InlineKeyboardButton("📊 ရလဒ်များကြည့်မယ်", callback_data="view_results")]
+        ]),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def handle_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """အကောင့်စီမံခန့်ခွဲခြင်း"""
+    await update.message.reply_text(
+        "👤 *သင့်အကောင့်အချက်အလက်များ*\n\n"
+        "📧 အီးမေးလ်: user@example.com\n"
+        "📱 ဖုန်းနံပါတ်: 09XXXXXXXXX\n"
+        "🎰 ကံစမ်းမဲအရေအတွက်: 15\n"
+        "🏆 ဆုရရှိမှု: 3\n\n"
+        "အောက်ပါခလုတ်များဖြင့် စီမံနိုင်ပါသည်:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ အချက်အလက်ပြင်မယ်", callback_data="edit_profile")],
+            [InlineKeyboardButton("🔐 လျှို့ဝှက်နံပါတ်ပြောင်းမယ်", callback_data="change_password")],
+            [InlineKeyboardButton("📱 ဖုန်းနံပါတ်ပြောင်းမယ်", callback_data="change_phone")]
+        ]),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def handle_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """နောက်သို့ပြန်ခြင်း"""
+    await update.message.reply_text(
+        "🏠 *ပင်မမီနူးသို့ ပြန်လာပြီ*\n\n"
+        "အောက်ပါခလုတ်များမှ ရွေးချယ်နိုင်ပါသည်:",
+        reply_markup=get_main_reply_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def handle_main_menu(query, context):
+    """ပင်မမီနူးသို့ပြန်ခြင်း"""
+    await query.edit_message_text(
+        "🏠 *ပင်မမီနူးသို့ ပြန်လာပြီ*\n\n"
+        "အောက်ပါခလုတ်များမှ ရွေးချယ်နိုင်ပါသည်:",
+        reply_markup=get_main_inline_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# ==============================
+# OTHER HANDLERS (Placeholders)
+# ==============================
+async def handle_view_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📊 ရလဒ်များကြည့်ရှုခြင်း...")
+
+async def handle_prizes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🏆 ဆုကြေးများကြည့်ရှုခြင်း...")
+
+async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🆘 အကူအညီ...")
+
+async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⚙️ ဆက်တင်...")
+
+async def handle_help_inline(query, context):
+    await query.edit_message_text("ℹ️ အကူအညီ...")
+
+# ==============================
+# MAIN APPLICATION
+# ==============================
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    
+    # Command handlers
+    app.add_handler(CommandHandler("start", start_command))
+    
+    # Reply keyboard handlers
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply_buttons))
+    
+    # Inline button handlers
+    app.add_handler(CallbackQueryHandler(handle_inline_buttons))
+    
+    print("🎰 LUCKY DRAW MYANMAR Bot is running with proper UI/UX...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
