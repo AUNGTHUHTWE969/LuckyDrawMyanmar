@@ -216,3 +216,27 @@ if __name__ == "__main__":
     # Start Flask app
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
+    import os
+import logging
+import asyncio
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# ... (သင့်ရဲ့ မူရင်း bot code ကို ဒီမှာထည့်ပါ)
+
+async def main():
+    """Main function"""
+    bot = LotteryBot()
+    await bot.run()
+
+if __name__ == "__main__":
+    asyncio.run(main())
