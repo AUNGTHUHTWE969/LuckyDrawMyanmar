@@ -3,7 +3,8 @@ from telegram import (
     InlineKeyboardButton, 
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
-    KeyboardButton
+    KeyboardButton,
+    ReplyKeyboardRemove
 )
 from telegram.ext import (
     Application, 
@@ -16,9 +17,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 import sqlite3
-import random
 from datetime import datetime
-import os
 
 # Bot Token and Admin Settings
 BOT_TOKEN = "8444084929:AAEIkrCAeuNjSHVUCYE9AEpg6IFqE52rNxc"
@@ -35,8 +34,6 @@ SYSTEM_SETTINGS = {
     "kpay_phone": "09789999368",
     "wavepay_name": "AUNG THU HTWE",  
     "wavepay_phone": "09789999368",
-    "admin_name": "AUNG THU HTWE",
-    "admin_phone": "09789999368",
 }
 
 # ==============================
@@ -76,7 +73,7 @@ class Database:
                 user_phone TEXT,
                 amount INTEGER,
                 screenshot_file_id TEXT,
-                status TEXT DEFAULT 'pending', -- pending/approved/rejected
+                status TEXT DEFAULT 'pending',
                 admin_note TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 processed_at DATETIME,
@@ -94,24 +91,11 @@ class Database:
                 payment_method TEXT,
                 phone_number TEXT,
                 amount INTEGER,
-                status TEXT DEFAULT 'pending', -- pending/approved/rejected
+                status TEXT DEFAULT 'pending',
                 admin_note TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 processed_at DATETIME,
                 processed_by INTEGER,
-                FOREIGN KEY (user_id) REFERENCES users (user_id)
-            )
-        ''')
-        
-        # Transaction history table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS transactions (
-                transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                type TEXT, -- deposit/withdraw
-                amount INTEGER,
-                status TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id)
             )
         ''')
@@ -148,17 +132,11 @@ class Database:
         ''', (status, admin_id, note, deposit_id))
         
         if status == 'approved':
-            # Get deposit info and update user balance
             cursor.execute('SELECT user_id, amount FROM deposit_requests WHERE deposit_id = ?', (deposit_id,))
             result = cursor.fetchone()
             if result:
                 user_id, amount = result
                 cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
-                # Add to transaction history
-                cursor.execute('''
-                    INSERT INTO transactions (user_id, type, amount, status)
-                    VALUES (?, 'deposit', ?, 'completed')
-                ''', (user_id, amount))
         
         self.conn.commit()
     
@@ -172,17 +150,11 @@ class Database:
         ''', (status, admin_id, note, withdraw_id))
         
         if status == 'approved':
-            # Get withdraw info and update user balance
             cursor.execute('SELECT user_id, amount FROM withdraw_requests WHERE withdraw_id = ?', (withdraw_id,))
             result = cursor.fetchone()
             if result:
                 user_id, amount = result
                 cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, user_id))
-                # Add to transaction history
-                cursor.execute('''
-                    INSERT INTO transactions (user_id, type, amount, status)
-                    VALUES (?, 'withdraw', ?, 'completed')
-                ''', (user_id, amount))
         
         self.conn.commit()
     
@@ -215,8 +187,7 @@ def get_main_reply_keyboard():
     return ReplyKeyboardMarkup([
         ["🎰 ကံစမ်းမဲ ဝယ်ယူရန်", "🏆 ဆုကြေးများကြည့်ရန်"],
         ["💵 ငွေသွင်းရန်", "💰 ငွေထုတ်ရန်"],
-        ["👤 ကျွန်တော့်ပရိုဖိုင်", "📊 ရလဒ်များကြည့်ရန်"],
-        ["📢 Channel & Group", "❓ အကူအညီ"]
+        ["👤 ကျွန်တော့်ပရိုဖိုင်", "📊 ရလဒ်များကြည့်ရန်"]
     ], resize_keyboard=True, persistent=True)
 
 def get_admin_reply_keyboard():
@@ -228,29 +199,52 @@ def get_admin_reply_keyboard():
     ], resize_keyboard=True, persistent=True)
 
 # ==============================
+# SIMPLE START COMMAND
+# ==============================
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    
+    # Create user if not exists
+    cursor = db.conn.cursor()
+    cursor.execute('''
+        INSERT OR IGNORE INTO users (user_id, username, first_name, last_name) 
+        VALUES (?, ?, ?, ?)
+    ''', (user.id, user.username, user.first_name, user.last_name))
+    db.conn.commit()
+    
+    if user.id in ADMIN_USERS:
+        await update.message.reply_text(
+            "👨‍💼 *Admin Panel* သို့ ကြိုဆိုပါတယ်",
+            reply_markup=get_admin_reply_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
+    else:
+        await update.message.reply_text(
+            "🎰 *LUCKY DRAW MYANMAR* မှ ကြိုဆိုပါတယ်!\n\n"
+            "အောက်ပါခလုတ်များဖြင့် စတင်အသုံးပြုနိုင်ပါသည်။",
+            reply_markup=get_main_reply_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+# ==============================
 # DEPOSIT SYSTEM
 # ==============================
 async def handle_deposit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေသွင်းရန် စတင်ခြင်း"""
     await update.message.reply_text(
-        "💵 *ငွေသွင်းရန်*\n\n"
-        "ကျေးဇူးပြု၍ သင့်အမည်ထည့်ပါ:",
+        "💵 *ငွေသွင်းရန်*\n\nကျေးဇူးပြု၍ သင့်အမည်ထည့်ပါ:",
         parse_mode=ParseMode.MARKDOWN
     )
     return DEPOSIT_NAME
 
 async def handle_deposit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေသွင်းသူအမည်"""
     context.user_data['deposit_name'] = update.message.text
     await update.message.reply_text(
-        "📞 *ကျေးဇူးပြု၍ သင့်ဖုန်းနံပါတ်ထည့်ပါ:*\n"
-        "ဥပမာ: 09123456789",
+        "📞 *ကျေးဇူးပြု၍ သင့်ဖုန်းနံပါတ်ထည့်ပါ:*\nဥပမာ: 09123456789",
         parse_mode=ParseMode.MARKDOWN
     )
     return DEPOSIT_PHONE
 
 async def handle_deposit_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေသွင်းသူဖုန်းနံပါတ်"""
     phone = update.message.text
     if not phone.startswith('09') or len(phone) != 11:
         await update.message.reply_text("❌ ဖုန်းနံပါတ် မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ပြန်ထည့်ပါ။")
@@ -258,14 +252,12 @@ async def handle_deposit_phone(update: Update, context: ContextTypes.DEFAULT_TYP
     
     context.user_data['deposit_phone'] = phone
     await update.message.reply_text(
-        "💰 *သွင်းလိုသောငွေပမာဏ ထည့်ပါ:*\n"
-        "ဥပမာ: 10000",
+        "💰 *သွင်းလိုသောငွေပမာဏ ထည့်ပါ:*\nဥပမာ: 10000",
         parse_mode=ParseMode.MARKDOWN
     )
     return DEPOSIT_AMOUNT
 
 async def handle_deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေသွင်းပမာဏ"""
     try:
         amount = int(update.message.text)
         if amount < 1000:
@@ -285,16 +277,13 @@ async def handle_deposit_amount(update: Update, context: ContextTypes.DEFAULT_TY
         return DEPOSIT_AMOUNT
 
 async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေသွင်း Screenshot"""
     if not update.message.photo:
         await update.message.reply_text("❌ ကျေးဇူးပြု၍ Screenshot ပုံတစ်ပုံ ပို့ပါ။")
         return DEPOSIT_SCREENSHOT
     
-    # Get the largest photo
     photo_file = await update.message.photo[-1].get_file()
     file_id = photo_file.file_id
     
-    # Save deposit request
     user_id = update.effective_user.id
     deposit_id = db.create_deposit_request(
         user_id=user_id,
@@ -304,7 +293,6 @@ async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAUL
         screenshot_file_id=file_id
     )
     
-    # Send confirmation to user
     await update.message.reply_text(
         f"✅ *ငွေသွင်းမှု လက်ခံရရှိပါသည်!*\n\n"
         f"📝 အမည်: {context.user_data['deposit_name']}\n"
@@ -324,7 +312,6 @@ async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAUL
         file_id
     )
     
-    # Clear user data
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -332,16 +319,13 @@ async def handle_deposit_screenshot(update: Update, context: ContextTypes.DEFAUL
 # WITHDRAW SYSTEM
 # ==============================
 async def handle_withdraw_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေထုတ်ရန် စတင်ခြင်း"""
     await update.message.reply_text(
-        "💰 *ငွေထုတ်ရန်*\n\n"
-        "ကျေးဇူးပြု၍ သင့်အမည်ထည့်ပါ:",
+        "💰 *ငွေထုတ်ရန်*\n\nကျေးဇူးပြု၍ သင့်အမည်ထည့်ပါ:",
         parse_mode=ParseMode.MARKDOWN
     )
     return WITHDRAW_NAME
 
 async def handle_withdraw_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေထုတ်သူအမည်"""
     context.user_data['withdraw_name'] = update.message.text
     
     keyboard = ReplyKeyboardMarkup([
@@ -357,7 +341,6 @@ async def handle_withdraw_name(update: Update, context: ContextTypes.DEFAULT_TYP
     return WITHDRAW_METHOD
 
 async def handle_withdraw_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေလွှဲနည်းလမ်း"""
     method = update.message.text
     if method not in ["📱 KPay", "💙 WavePay"]:
         await update.message.reply_text("❌ ကျေးဇူးပြု၍ ငွေလွှဲနည်းလမ်း ရွေးချယ်ပါ။")
@@ -366,15 +349,13 @@ async def handle_withdraw_method(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['withdraw_method'] = "KPay" if method == "📱 KPay" else "WavePay"
     
     await update.message.reply_text(
-        f"📞 *{context.user_data['withdraw_method']} ဖုန်းနံပါတ် ထည့်ပါ:*\n"
-        "ဥပမာ: 09123456789",
+        f"📞 *{context.user_data['withdraw_method']} ဖုန်းနံပါတ် ထည့်ပါ:*\nဥပမာ: 09123456789",
         reply_markup=ReplyKeyboardRemove(),
         parse_mode=ParseMode.MARKDOWN
     )
     return WITHDRAW_PHONE
 
 async def handle_withdraw_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေထုတ်ဖုန်းနံပါတ်"""
     phone = update.message.text
     if not phone.startswith('09') or len(phone) != 11:
         await update.message.reply_text("❌ ဖုန်းနံပါတ် မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ပြန်ထည့်ပါ။")
@@ -382,26 +363,23 @@ async def handle_withdraw_phone(update: Update, context: ContextTypes.DEFAULT_TY
     
     context.user_data['withdraw_phone'] = phone
     await update.message.reply_text(
-        "💰 *ထုတ်လိုသောငွေပမာဏ ထည့်ပါ:*\n"
-        "ဥပမာ: 10000\n\n"
-        "⚠️ အနည်းဆုံး 1000 ကျပ်",
+        "💰 *ထုတ်လိုသောငွေပမာဏ ထည့်ပါ:*\nဥပမာ: 10000\n\n⚠️ အနည်းဆုံး 1000 ကျပ်",
         parse_mode=ParseMode.MARKDOWN
     )
     return WITHDRAW_AMOUNT
 
 async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေထုတ်ပမာဏ"""
     try:
         amount = int(update.message.text)
         if amount < 1000:
             await update.message.reply_text("❌ အနည်းဆုံး 1000 ကျပ် ထုတ်ရန် လိုအပ်ပါသည်။")
             return WITHDRAW_AMOUNT
         
-        # Check user balance
         user_id = update.effective_user.id
         cursor = db.conn.cursor()
         cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-        user_balance = cursor.fetchone()[0] or 0
+        result = cursor.fetchone()
+        user_balance = result[0] if result else 0
         
         if amount > user_balance:
             await update.message.reply_text(
@@ -411,7 +389,6 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
             )
             return WITHDRAW_AMOUNT
         
-        # Save withdraw request
         withdraw_id = db.create_withdraw_request(
             user_id=user_id,
             user_name=context.user_data['withdraw_name'],
@@ -420,7 +397,6 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
             amount=amount
         )
         
-        # Send confirmation to user
         await update.message.reply_text(
             f"✅ *ငွေထုတ်မှု လက်ခံရရှိပါသည်!*\n\n"
             f"📝 အမည်: {context.user_data['withdraw_name']}\n"
@@ -432,7 +408,6 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode=ParseMode.MARKDOWN
         )
         
-        # Notify admins
         await notify_admins_about_withdraw(
             context.bot, withdraw_id, user_id,
             context.user_data['withdraw_name'],
@@ -441,7 +416,6 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
             amount
         )
         
-        # Clear user data
         context.user_data.clear()
         return ConversationHandler.END
         
@@ -450,10 +424,9 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
         return WITHDRAW_AMOUNT
 
 # ==============================
-# ADMIN NOTIFICATION FUNCTIONS
+# ADMIN NOTIFICATIONS
 # ==============================
 async def notify_admins_about_deposit(bot, deposit_id, user_id, name, phone, amount, screenshot_file_id):
-    """Notify admins about new deposit request"""
     message_text = f"""
 🚨 *အသစ်ငွေသွင်းမှု* 🚨
 
@@ -468,8 +441,7 @@ async def notify_admins_about_deposit(bot, deposit_id, user_id, name, phone, amo
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ အတည်ပြုမည်", callback_data=f"approve_deposit_{deposit_id}"),
          InlineKeyboardButton("❌ ပယ်ဖျက်မည်", callback_data=f"reject_deposit_{deposit_id}")],
-        [InlineKeyboardButton("⏳ စောင့်ဆိုင်းမည်", callback_data=f"pending_deposit_{deposit_id}"),
-         InlineKeyboardButton("✏️ ပြန်လည်ပြင်ဆင်မည်", callback_data=f"edit_deposit_{deposit_id}")]
+        [InlineKeyboardButton("⏳ စောင့်ဆိုင်းမည်", callback_data=f"pending_deposit_{deposit_id}")]
     ])
     
     for admin_id in ADMIN_USERS:
@@ -485,7 +457,6 @@ async def notify_admins_about_deposit(bot, deposit_id, user_id, name, phone, amo
             print(f"Failed to notify admin {admin_id}: {e}")
 
 async def notify_admins_about_withdraw(bot, withdraw_id, user_id, name, method, phone, amount):
-    """Notify admins about new withdraw request"""
     message_text = f"""
 🚨 *အသစ်ငွေထုတ်မှု* 🚨
 
@@ -501,8 +472,7 @@ async def notify_admins_about_withdraw(bot, withdraw_id, user_id, name, method, 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ အတည်ပြုမည်", callback_data=f"approve_withdraw_{withdraw_id}"),
          InlineKeyboardButton("❌ ပယ်ဖျက်မည်", callback_data=f"reject_withdraw_{withdraw_id}")],
-        [InlineKeyboardButton("⏳ စောင့်ဆိုင်းမည်", callback_data=f"pending_withdraw_{withdraw_id}"),
-         InlineKeyboardButton("✏️ ပြန်လည်ပြင်ဆင်မည်", callback_data=f"edit_withdraw_{withdraw_id}")]
+        [InlineKeyboardButton("⏳ စောင့်ဆိုင်းမည်", callback_data=f"pending_withdraw_{withdraw_id}")]
     ])
     
     for admin_id in ADMIN_USERS:
@@ -520,7 +490,6 @@ async def notify_admins_about_withdraw(bot, withdraw_id, user_id, name, method, 
 # ADMIN PANEL HANDLERS
 # ==============================
 async def handle_deposit_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေသွင်းမှုများ စီမံခန့်ခွဲမှု"""
     if update.effective_user.id not in ADMIN_USERS:
         await update.message.reply_text("❌ Admin access required")
         return
@@ -533,24 +502,14 @@ async def handle_deposit_management(update: Update, context: ContextTypes.DEFAUL
     
     message_text = f"💳 *စောင့်ဆိုင်းနေသော ငွေသွင်းမှုများ - {len(pending_deposits)} ခု*\n\n"
     
-    for deposit in pending_deposits[:5]:  # Show first 5
+    for deposit in pending_deposits[:5]:
         deposit_id, user_id, name, phone, amount, screenshot_id, created_at = deposit
         message_text += f"🆔 #{deposit_id} | {name} | {amount} Ks\n"
         message_text += f"📞 {phone} | 📅 {created_at[:16]}\n\n"
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 အားလုံးကြည့်ရန်", callback_data="view_all_deposits")],
-        [InlineKeyboardButton("🔄 နောက်မှပြန်ကြည့်မည်", callback_data="refresh_deposits")]
-    ])
-    
-    await update.message.reply_text(
-        message_text,
-        reply_markup=keyboard,
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
 
 async def handle_withdraw_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ငွေထုတ်မှုများ စီမံခန့်ခွဲမှု"""
     if update.effective_user.id not in ADMIN_USERS:
         await update.message.reply_text("❌ Admin access required")
         return
@@ -563,28 +522,18 @@ async def handle_withdraw_management(update: Update, context: ContextTypes.DEFAU
     
     message_text = f"💸 *စောင့်ဆိုင်းနေသော ငွေထုတ်မှုများ - {len(pending_withdraws)} ခု*\n\n"
     
-    for withdraw in pending_withdraws[:5]:  # Show first 5
+    for withdraw in pending_withdraws[:5]:
         withdraw_id, user_id, name, method, phone, amount, created_at = withdraw
         message_text += f"🆔 #{withdraw_id} | {name} | {amount} Ks\n"
         message_text += f"💳 {method} | 📞 {phone}\n"
         message_text += f"📅 {created_at[:16]}\n\n"
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 အားလုံးကြည့်ရန်", callback_data="view_all_withdraws")],
-        [InlineKeyboardButton("🔄 နောက်မှပြန်ကြည့်မည်", callback_data="refresh_withdraws")]
-    ])
-    
-    await update.message.reply_text(
-        message_text,
-        reply_markup=keyboard,
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN)
 
 # ==============================
 # ADMIN APPROVAL HANDLERS
 # ==============================
 async def handle_admin_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin approval buttons handler"""
     query = update.callback_query
     await query.answer()
     
@@ -648,25 +597,48 @@ async def handle_reply_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         await handle_deposit_start(update, context)
     elif text == "💰 ငွေထုတ်ရန်":
         await handle_withdraw_start(update, context)
+    elif text == "🏆 ဆုကြေးများကြည့်ရန်":
+        await show_prizes(update, context)
+    elif text == "👤 ကျွန်တော့်ပရိုဖိုင်":
+        await show_profile(update, context)
 
 # ==============================
-# START COMMAND
+# SIMPLE PLACEHOLDER FUNCTIONS
 # ==============================
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+async def show_prizes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prize_text = """
+🏆 *LUCKY DRAW MYANMAR - ဆုကြေးများ* 🏆
+
+🥇 ဆုကြီး - 10,000,000 Ks
+🥈 ဒုတိယဆု - 5,000,000 Ks  
+🥉 တတိယဆု - 1,000,000 Ks
+🎯 စတုတ္ထဆု - 500,000 Ks
+🎁 ပဉ္စမဆု - 100,000 Ks
+
+💰 တစ်ကြိမ်လျှင် 1000 ကျပ်
+⏰ နေ့စဉ်ကံစမ်းမဲထွက်ချိန်: 18:00
+"""
+    await update.message.reply_text(prize_text, parse_mode=ParseMode.MARKDOWN)
+
+async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT first_name, balance, tickets FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
     
-    if user.id in ADMIN_USERS:
-        await update.message.reply_text(
-            "👨‍💼 *Admin Panel* သို့ ကြိုဆိုပါတယ်",
-            reply_markup=get_admin_reply_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
+    if result:
+        name, balance, tickets = result
+        profile_text = f"""
+👤 *သင့်ပရိုဖိုင်*
+
+📝 အမည်: {name}
+💳 လက်ကျန်ငွေ: {balance} Ks
+🎫 ကံစမ်းမဲ: {tickets} tickets
+        """
     else:
-        await update.message.reply_text(
-            "🎰 *LUCKY DRAW MYANMAR* မှ ကြိုဆိုပါတယ်!",
-            reply_markup=get_main_reply_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
+        profile_text = "👤 *သင့်ပရိုဖိုင်*\n\nအချက်အလက်များ မတွေ့ရှိပါ။"
+    
+    await update.message.reply_text(profile_text, parse_mode=ParseMode.MARKDOWN)
 
 # ==============================
 # CONVERSATION HANDLERS
@@ -709,10 +681,9 @@ def main():
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply_buttons))
         app.add_handler(CallbackQueryHandler(handle_admin_approval))
         
-        print("🤖 LUCKY DRAW MYANMAR Bot with Payment System starting...")
-        print("💳 Deposit System: Activated")
-        print("💰 Withdraw System: Activated")
-        print("👨‍💼 Admin Panel: Enhanced")
+        print("🤖 LUCKY DRAW MYANMAR Bot starting...")
+        print("✅ Payment System: Activated")
+        print("👨‍💼 Admin Panel: Ready")
         
         app.run_polling()
         
