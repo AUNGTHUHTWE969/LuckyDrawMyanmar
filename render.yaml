@@ -1,10 +1,6 @@
-databases:
-  - name: lottery_db
-    plan: free
-
 services:
   - type: worker
-    name: lottery-bot
+    name: lottery-bot-worker
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -18,3 +14,7 @@ services:
         fromDatabase:
           name: lottery_db
           property: connectionString
+
+databases:
+  - name: lottery_db
+    plan: free
