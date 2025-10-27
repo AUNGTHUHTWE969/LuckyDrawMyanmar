@@ -12,36 +12,51 @@ from telegram.ext import (
     MessageHandler, 
     ContextTypes, 
     filters,
-    ConversationHandler
+    ConversationHandler,
+    JobQueue
 )
 from telegram.constants import ParseMode
 import sqlite3
 import random
-from datetime import datetime
-import os
+from datetime import datetime, timedelta
+import asyncio
+import logging
+import json
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Bot Token and Admin Settings
 BOT_TOKEN = "8444084929:AAEIkrCAeuNjSHVUCYE9AEpg6IFqE52rNxc"
-ADMIN_USERS = [8070878424]  # Admin user ID
+ADMIN_USERS = [8070878424]
 
-# Channel Links
+# Channel Links for alarms
 PAYMENT_CHANNEL = "https://t.me/+C-60JUm8CKVlOTBl"
 OFFICIAL_CHANNEL = "https://t.me/+_P7OHmGNs8g2MGE1"
 
-# Conversation states for payment info
-KPAY_NAME, KPAY_PHONE, WAVEPAY_NAME, WAVEPAY_PHONE, ADMIN_NAME, ADMIN_PHONE = range(6)
+# Conversation states for prize management
+PRIZE_NAME_1ST, PRIZE_AMOUNT_1ST, PRIZE_NAME_2ND, PRIZE_AMOUNT_2ND, PRIZE_NAME_3RD, PRIZE_AMOUNT_3RD, PRIZE_NAME_4TH, PRIZE_AMOUNT_4TH, PRIZE_NAME_OTHER, PRIZE_AMOUNT_OTHER = range(10)
 
-# System settings with your provided information
+# System settings with prizes including names
 SYSTEM_SETTINGS = {
     "ticket_price": 1000,
-    "auto_draw_time": "18:00",
+    "auto_draw_time": "18:00", 
     "auto_draw_enabled": True,
     "kpay_name": "AUNG THU HTWE",
     "kpay_phone": "09789999368",
     "wavepay_name": "AUNG THU HTWE",  
     "wavepay_phone": "09789999368",
     "admin_name": "AUNG THU HTWE",
-    "admin_phone": "09789999368"
+    "admin_phone": "09789999368",
+    "alarm_times": ["17:30", "17:45", "17:50", "17:55", "17:58", "17:59"],
+    "prizes": {
+        "1st": {"name": "ဆုကြီး", "amount": "10,000,000 Ks"},
+        "2nd": {"name": "ဒုတိယဆု", "amount": "5,000,000 Ks"}, 
+        "3rd": {"name": "တတိယဆု", "amount": "1,000,000 Ks"},
+        "4th": {"name": "စတုတ္ထဆု", "amount": "500,000 Ks"},
+        "other": {"name": "ပဉ္စမဆု", "amount": "100,000 Ks"}
+    }
 }
 
 # ==============================
@@ -80,16 +95,27 @@ class Database:
         ''')
         
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS draws (
-                draw_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                numbers TEXT,
-                draw_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-                prize TEXT,
-                status TEXT DEFAULT 'pending',
-                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            CREATE TABLE IF NOT EXISTS prizes (
+                prize_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                prize_rank TEXT,
+                prize_name TEXT,
+                prize_amount TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Insert default prizes with names
+        default_prizes = [
+            ('1st', 'ဆုကြီး', '10,000,000 Ks'),
+            ('2nd', 'ဒုတိယဆု', '5,000,000 Ks'),
+            ('3rd', 'တတိယဆု', '1,000,000 Ks'), 
+            ('4th', 'စတုတ္ထဆု', '500,000 Ks'),
+            ('other', 'ပဉ္စမဆု', '100,000 Ks')
+        ]
+        
+        cursor.executemany('''
+            INSERT OR IGNORE INTO prizes (prize_rank, prize_name, prize_amount) VALUES (?, ?, ?)
+        ''', default_prizes)
         
         # Insert default settings
         default_settings = [
@@ -101,7 +127,9 @@ class Database:
             ('admin_phone', '09789999368'),
             ('ticket_price', '1000'),
             ('auto_draw_time', '18:00'),
-            ('auto_draw_enabled', 'True')
+            ('auto_draw_enabled', 'True'),
+            ('alarm_times', '["17:30", "17:45", "17:50", "17:55", "17:58", "17:59"]'),
+            ('prizes', '{"1st": {"name": "ဆုကြီး", "amount": "10,000,000 Ks"}, "2nd": {"name": "ဒုတိယဆု", "amount": "5,000,000 Ks"}, "3rd": {"name": "တတိယဆု", "amount": "1,000,000 Ks"}, "4th": {"name": "စတုတ္ထဆု", "amount": "500,000 Ks"}, "other": {"name": "ပဉ္စမဆု", "amount": "100,000 Ks"}}')
         ]
         
         cursor.executemany('''
@@ -111,7 +139,6 @@ class Database:
         self.conn.commit()
     
     def load_settings(self):
-        """Load settings from database"""
         cursor = self.conn.cursor()
         cursor.execute("SELECT key, value FROM settings")
         settings = cursor.fetchall()
@@ -122,11 +149,12 @@ class Database:
                     SYSTEM_SETTINGS[key] = int(value)
                 elif key in ['auto_draw_enabled']:
                     SYSTEM_SETTINGS[key] = value.lower() == 'true'
+                elif key in ['alarm_times', 'prizes']:
+                    SYSTEM_SETTINGS[key] = eval(value)
                 else:
                     SYSTEM_SETTINGS[key] = value
     
     def save_setting(self, key, value):
-        """Save setting to database"""
         cursor = self.conn.cursor()
         cursor.execute('''
             INSERT OR REPLACE INTO settings (key, value) 
@@ -134,61 +162,391 @@ class Database:
         ''', (key, str(value)))
         self.conn.commit()
         SYSTEM_SETTINGS[key] = value
+    
+    def get_prizes(self):
+        """Get prizes from database"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT prize_rank, prize_name, prize_amount FROM prizes")
+        prizes = cursor.fetchall()
+        prize_dict = {}
+        for rank, name, amount in prizes:
+            prize_dict[rank] = {"name": name, "amount": amount}
+        return prize_dict
+    
+    def update_prize(self, rank, name, amount):
+        """Update prize name and amount"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO prizes (prize_rank, prize_name, prize_amount) 
+            VALUES (?, ?, ?)
+        ''', (rank, name, amount))
+        self.conn.commit()
+        # Update system settings
+        SYSTEM_SETTINGS['prizes'][rank] = {"name": name, "amount": amount}
+        self.save_setting('prizes', SYSTEM_SETTINGS['prizes'])
 
 db = Database()
 
 # ==============================
-# REPLY KEYBOARDS
+# BEAUTIFUL PRIZE DISPLAY FOR MAIN MENU
 # ==============================
-def get_main_reply_keyboard():
-    return ReplyKeyboardMarkup([
-        ["🎰 ကံစမ်းမဲ ဝယ်ယူရန်", "📊 ပြိုင်ပွဲများ ရလဒ်များ"],
-        ["👤 My Profile", "📺 ကြော်ငြာ အပ်ရန်"],
-        ["📢 Channel & Group", "👨‍💼 Admin"],
-        ["🤝 Referral", "❓ FAQ"],
-        ["ℹ️ About Us"]
-    ], resize_keyboard=True, persistent=True)
+def get_prizes_display():
+    """လှလှလေးပေါ်အောင် ဆုကြေးများပြသခြင်း"""
+    prizes = db.get_prizes()
+    
+    prize_display = f"""
+🏆 *LUCKY DRAW MYANMAR - ဆုကြေးများ* 🏆
 
-def get_admin_reply_keyboard():
-    return ReplyKeyboardMarkup([
-        ["📊 စာရင်းဇယားများ", "👥 သုံးစွဲသူများ"],
-        ["🎯 ကံစမ်းမဲ စီမံခန့်ခွဲမှု", "⚙️ ဆက်တင်များ"],
-        ["💰 ငွေလွှဲအကောင့်များ", "📞 အဆက်အသွယ်"],
-        ["🏠 Main Menu"]
-    ], resize_keyboard=True, persistent=True)
+┌─────────────────────────┐
+│       💎 ဆုကြီးများ      │
+└─────────────────────────┘
 
-def get_payment_management_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📱 KPay Name", callback_data="set_kpay_name"),
-         InlineKeyboardButton("📞 KPay Phone", callback_data="set_kpay_phone")],
-        [InlineKeyboardButton("💙 WavePay Name", callback_data="set_wavepay_name"),
-         InlineKeyboardButton("📞 WavePay Phone", callback_data="set_wavepay_phone")],
+"""
+    
+    prize_emojis = {
+        "1st": "🥇",
+        "2nd": "🥈", 
+        "3rd": "🥉",
+        "4th": "🎯",
+        "other": "🎁"
+    }
+    
+    for rank in ["1st", "2nd", "3rd", "4th", "other"]:
+        if rank in prizes:
+            prize_data = prizes[rank]
+            emoji = prize_emojis.get(rank, "🎁")
+            prize_display += f"{emoji} *{prize_data['name']}* - {prize_data['amount']}\n"
+    
+    prize_display += f"""
+┌─────────────────────────┐
+│   🎰 ကံစမ်းမဲဝယ်ယူရန်   │
+└─────────────────────────┘
+
+💰 *တစ်ကြိမ်လျှင် {SYSTEM_SETTINGS['ticket_price']} ကျပ်*
+⏰ *နေ့စဉ်ကံစမ်းမဲထွက်ချိန်: {SYSTEM_SETTINGS['auto_draw_time']}*
+
+✨ *သင့်ကံကို စမ်းကြည့်ပါ!* ✨
+"""
+    
+    return prize_display
+
+# ==============================
+# PRIZE MANAGEMENT SYSTEM
+# ==============================
+async def handle_prize_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prize management for admin"""
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("❌ Admin access required")
+        return
+    
+    prizes = db.get_prizes()
+    
+    prize_text = f"""
+🏆 *ဆုကြေးများ စီမံခန့်ခွဲမှု*
+
+*လက်ရှိဆုကြေးများ:*
+
+"""
+    
+    for rank in ["1st", "2nd", "3rd", "4th", "other"]:
+        if rank in prizes:
+            prize_data = prizes[rank]
+            prize_text += f"• {prize_data['name']}: *{prize_data['amount']}*\n"
+    
+    prize_text += "\nအောက်ပါခလုတ်များဖြင့် ဆုနာမည်နှင့် ဆုကြေးပမာဏများကို ပြင်ဆင်နိုင်ပါသည်:"
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🥇 1st Prize", callback_data="edit_1st_prize"),
+         InlineKeyboardButton("🥈 2nd Prize", callback_data="edit_2nd_prize")],
+        [InlineKeyboardButton("🥉 3rd Prize", callback_data="edit_3rd_prize"),
+         InlineKeyboardButton("🎯 4th Prize", callback_data="edit_4th_prize")],
+        [InlineKeyboardButton("🎁 Other Prizes", callback_data="edit_other_prize")],
+        [InlineKeyboardButton("👀 Main Menu Preview", callback_data="preview_prizes")],
         [InlineKeyboardButton("🔙 Back to Admin", callback_data="back_to_admin")]
     ])
+    
+    await update.message.reply_text(
+        prize_text,
+        reply_markup=keyboard,
+        parse_mode=ParseMode.MARKDOWN
+    )
 
-def get_contact_management_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👤 Admin Name", callback_data="set_admin_name"),
-         InlineKeyboardButton("📞 Admin Phone", callback_data="set_admin_phone")],
-        [InlineKeyboardButton("🔙 Back to Admin", callback_data="back_to_admin")]
+# ==============================
+# EDIT PRIZE FUNCTIONS (Name and Amount)
+# ==============================
+async def edit_1st_prize(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    prizes = db.get_prizes()
+    prize_data = prizes.get('1st', {'name': 'ဆုကြီး', 'amount': '10,000,000 Ks'})
+    
+    await query.edit_message_text(
+        f"🥇 *1st Prize ပြင်ဆင်ရန်*\n\n"
+        f"လက်ရှိ: {prize_data['name']} - {prize_data['amount']}\n\n"
+        f"ကျေးဇူးပြု၍ အသစ် ဆုနာမည် ထည့်ပါ:\n"
+        f"ဥပမာ: `ဆုကြီး` သို့မဟုတ် `Grand Prize`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_NAME_1ST
+
+async def edit_2nd_prize(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    prizes = db.get_prizes()
+    prize_data = prizes.get('2nd', {'name': 'ဒုတိယဆု', 'amount': '5,000,000 Ks'})
+    
+    await query.edit_message_text(
+        f"🥈 *2nd Prize ပြင်ဆင်ရန်*\n\n"
+        f"လက်ရှိ: {prize_data['name']} - {prize_data['amount']}\n\n"
+        f"ကျေးဇူးပြု၍ အသစ် ဆုနာမည် ထည့်ပါ:\n"
+        f"ဥပမာ: `ဒုတိယဆု` သို့မဟုတ် `Second Prize`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_NAME_2ND
+
+async def edit_3rd_prize(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    prizes = db.get_prizes()
+    prize_data = prizes.get('3rd', {'name': 'တတိယဆု', 'amount': '1,000,000 Ks'})
+    
+    await query.edit_message_text(
+        f"🥉 *3rd Prize ပြင်ဆင်ရန်*\n\n"
+        f"လက်ရှိ: {prize_data['name']} - {prize_data['amount']}\n\n"
+        f"ကျေးဇူးပြု၍ အသစ် ဆုနာမည် ထည့်ပါ:\n"
+        f"ဥပမာ: `တတိယဆု` သို့မဟုတ် `Third Prize`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_NAME_3RD
+
+async def edit_4th_prize(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    prizes = db.get_prizes()
+    prize_data = prizes.get('4th', {'name': 'စတုတ္ထဆု', 'amount': '500,000 Ks'})
+    
+    await query.edit_message_text(
+        f"🎯 *4th Prize ပြင်ဆင်ရန်*\n\n"
+        f"လက်ရှိ: {prize_data['name']} - {prize_data['amount']}\n\n"
+        f"ကျေးဇူးပြု၍ အသစ် ဆုနာမည် ထည့်ပါ:\n"
+        f"ဥပမာ: `စတုတ္ထဆု` သို့မဟုတ် `Fourth Prize`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_NAME_4TH
+
+async def edit_other_prize(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    prizes = db.get_prizes()
+    prize_data = prizes.get('other', {'name': 'ပဉ္စမဆု', 'amount': '100,000 Ks'})
+    
+    await query.edit_message_text(
+        f"🎁 *Other Prizes ပြင်ဆင်ရန်*\n\n"
+        f"လက်ရှိ: {prize_data['name']} - {prize_data['amount']}\n\n"
+        f"ကျေးဇူးပြု၍ အသစ် ဆုနာမည် ထည့်ပါ:\n"
+        f"ဥပမာ: `ပဉ္စမဆု` သို့မဟုတ် `Consolation Prize`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_NAME_OTHER
+
+# ==============================
+# HANDLE PRIZE NAME INPUTS
+# ==============================
+async def handle_prize_name_1st_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("❌ Admin access required")
+        return ConversationHandler.END
+        
+    prize_name = update.message.text.strip()
+    if not prize_name:
+        await update.message.reply_text("❌ ဆုနာမည် ထည့်သွင်းရန်လိုအပ်ပါသည်။")
+        return PRIZE_NAME_1ST
+    
+    context.user_data['temp_prize_name_1st'] = prize_name
+    await update.message.reply_text(
+        f"✅ *ဆုနာမည် သိမ်းဆည်းပြီးပါပြီ!*\n\n"
+        f"ဆုနာမည်: {prize_name}\n\n"
+        f"ကျေးဇူးပြု၍ ဆုကြေးပမာဏ ထည့်ပါ:\n"
+        f"ဥပမာ: `10,000,000 Ks`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_AMOUNT_1ST
+
+async def handle_prize_name_2nd_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("❌ Admin access required")
+        return ConversationHandler.END
+        
+    prize_name = update.message.text.strip()
+    if not prize_name:
+        await update.message.reply_text("❌ ဆုနာမည် ထည့်သွင်းရန်လိုအပ်ပါသည်။")
+        return PRIZE_NAME_2ND
+    
+    context.user_data['temp_prize_name_2nd'] = prize_name
+    await update.message.reply_text(
+        f"✅ *ဆုနာမည် သိမ်းဆည်းပြီးပါပြီ!*\n\n"
+        f"ဆုနာမည်: {prize_name}\n\n"
+        f"ကျေးဇူးပြု၍ ဆုကြေးပမာဏ ထည့်ပါ:\n"
+        f"ဥပမာ: `5,000,000 Ks`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_AMOUNT_2ND
+
+async def handle_prize_name_3rd_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("❌ Admin access required")
+        return ConversationHandler.END
+        
+    prize_name = update.message.text.strip()
+    if not prize_name:
+        await update.message.reply_text("❌ ဆုနာမည် ထည့်သွင်းရန်လိုအပ်ပါသည်။")
+        return PRIZE_NAME_3RD
+    
+    context.user_data['temp_prize_name_3rd'] = prize_name
+    await update.message.reply_text(
+        f"✅ *ဆုနာမည် သိမ်းဆည်းပြီးပါပြီ!*\n\n"
+        f"ဆုနာမည်: {prize_name}\n\n"
+        f"ကျေးဇူးပြု၍ ဆုကြေးပမာဏ ထည့်ပါ:\n"
+        f"ဥပမာ: `1,000,000 Ks`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_AMOUNT_3RD
+
+async def handle_prize_name_4th_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("❌ Admin access required")
+        return ConversationHandler.END
+        
+    prize_name = update.message.text.strip()
+    if not prize_name:
+        await update.message.reply_text("❌ ဆုနာမည် ထည့်သွင်းရန်လိုအပ်ပါသည်။")
+        return PRIZE_NAME_4TH
+    
+    context.user_data['temp_prize_name_4th'] = prize_name
+    await update.message.reply_text(
+        f"✅ *ဆုနာမည် သိမ်းဆည်းပြီးပါပြီ!*\n\n"
+        f"ဆုနာမည်: {prize_name}\n\n"
+        f"ကျေးဇူးပြု၍ ဆုကြေးပမာဏ ထည့်ပါ:\n"
+        f"ဥပမာ: `500,000 Ks`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_AMOUNT_4TH
+
+async def handle_prize_name_other_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("❌ Admin access required")
+        return ConversationHandler.END
+        
+    prize_name = update.message.text.strip()
+    if not prize_name:
+        await update.message.reply_text("❌ ဆုနာမည် ထည့်သွင်းရန်လိုအပ်ပါသည်။")
+        return PRIZE_NAME_OTHER
+    
+    context.user_data['temp_prize_name_other'] = prize_name
+    await update.message.reply_text(
+        f"✅ *ဆုနာမည် သိမ်းဆည်းပြီးပါပြီ!*\n\n"
+        f"ဆုနာမည်: {prize_name}\n\n"
+        f"ကျေးဇူးပြု၍ ဆုကြေးပမာဏ ထည့်ပါ:\n"
+        f"ဥပမာ: `100,000 Ks`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return PRIZE_AMOUNT_OTHER
+
+# ==============================
+# HANDLE PRIZE AMOUNT INPUTS
+# ==============================
+async def handle_prize_amount_1st_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("❌ Admin access required")
+        return ConversationHandler.END
+        
+    prize_amount = update.message.text.strip()
+    if not prize_amount:
+        await update.message.reply_text("❌ ဆုကြေးပမာဏ ထည့်သွင်းရန်လိုအပ်ပါသည်။")
+        return PRIZE_AMOUNT_1ST
+    
+    prize_name = context.user_data.get('temp_prize_name_1st', 'ဆုကြီး')
+    db.update_prize('1st', prize_name, prize_amount)
+    
+    await update.message.reply_text(
+        f"✅ *1st Prize ပြင်ဆင်ပြီးပါပြီ!*\n\n"
+        f"ဆုနာမည်: {prize_name}\n"
+        f"ဆုကြေး: {prize_amount}",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+async def handle_prize_amount_2nd_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("❌ Admin access required")
+        return ConversationHandler.END
+        
+    prize_amount = update.message.text.strip()
+    if not prize_amount:
+        await update.message.reply_text("❌ ဆုကြေးပမာဏ ထည့်သွင်းရန်လိုအပ်ပါသည်။")
+        return PRIZE_AMOUNT_2ND
+    
+    prize_name = context.user_data.get('temp_prize_name_2nd', 'ဒုတိယဆု')
+    db.update_prize('2nd', prize_name, prize_amount)
+    
+    await update.message.reply_text(
+        f"✅ *2nd Prize ပြင်ဆင်ပြီးပါပြီ!*\n\n"
+        f"ဆုနာမည်: {prize_name}\n"
+        f"ဆုကြေး: {prize_amount}",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+async def handle_prize_amount_3rd_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("❌ Admin access required")
+        return ConversationHandler.END
+        
+    prize_amount = update.message.text.strip()
+    if not prize_amount:
+        await update.message.reply_text("❌ ဆုကြေးပမာဏ ထည့်သွင်းရန်လိုအပ်ပါသည်။")
+        return PRIZE_AMOUNT_3RD
+    
+    prize_name = context.user_data.get('temp_prize_name_3rd', 'တတိယဆု')
+    db.update_prize('3rd', prize_name, prize_amount)
+    
+    await update.message.reply_text(
+        f"✅ *3rd Prize ပြင်ဆင်ပြီးပါပြီ!*\n\n"
+        f"ဆုနာမည်: {prize_name}\n"
+        f"ဆုကြေး: {pri_amount}",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+# ... (4th and other prize amount handlers similar to above)
+
+# ==============================
+# PREVIEW PRIZES IN MAIN MENU STYLE
+# ==============================
+async def preview_prizes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    prize_display = get_prizes_display()
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ ဆုများပြင်ဆင်ရန်", callback_data="edit_prizes")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_prize_management")]
     ])
-
-def get_channel_keyboard():
-    """Channel links keyboard"""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💰 ငွေသွင်း/ထုတ် Alarms", url=PAYMENT_CHANNEL)],
-        [InlineKeyboardButton("📢 Official Channel", url=OFFICIAL_CHANNEL)],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]
-    ])
+    
+    await query.edit_message_text(
+        prize_display,
+        reply_markup=keyboard,
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 # ==============================
-# ADMIN CHECK
-# ==============================
-def is_admin(user_id):
-    return user_id in ADMIN_USERS
-
-# ==============================
-# START COMMAND
+# ENHANCED START COMMAND WITH BEAUTIFUL PRIZE DISPLAY
 # ==============================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -201,7 +559,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ''', (user.id, user.username, user.first_name, user.last_name))
     db.conn.commit()
     
-    if is_admin(user.id):
+    if user.id in ADMIN_USERS:
         await update.message.reply_text(
             f"👨‍💼 *Admin Panel* သို့ ကြိုဆိုပါတယ်\n\nAdmin: {SYSTEM_SETTINGS.get('admin_name', 'AUNG THU HTWE')}",
             reply_markup=get_admin_reply_keyboard(),
@@ -209,358 +567,73 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    welcome_text = f"""
-┌─────────────────────────┐
-│    LUCKY DRAW MYANMAR   │
-└─────────────────────────┘
-
-✨ *မင်္ဂလာပါ {user.first_name}!* ✨
-
-ကံစမ်းမဲ ငွေစုစုပေါင်း - 10,000,000 ကျပ်
-
-ကံစမ်းမဲကမ္ဘာထဲကို ကြိုဆိုပါတယ်။
-အောက်ပါခလုတ်များဖြင့် စတင်နိုင်ပါသည်။
-"""
+    # Show beautiful prize display
+    prize_display = get_prizes_display()
+    
+    keyboard = ReplyKeyboardMarkup([
+        ["🎰 ကံစမ်းမဲ ဝယ်ယူရန်", "🏆 ဆုကြေးများကြည့်ရန်"],
+        ["👤 ကျွန်တော့်ပရိုဖိုင်", "📊 ရလဒ်များကြည့်ရန်"],
+        ["📢 Channel များ", "❓ အကူအညီ"]
+    ], resize_keyboard=True, persistent=True)
     
     await update.message.reply_text(
-        welcome_text,
-        reply_markup=get_main_reply_keyboard(),
+        prize_display,
+        reply_markup=keyboard,
         parse_mode=ParseMode.MARKDOWN
     )
 
 # ==============================
-# PAYMENT & CONTACT MANAGEMENT
+# PRIZE VIEW COMMAND FOR USERS
 # ==============================
-async def handle_payment_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin access required")
-        return
-        
-    payment_text = f"""
-💳 *ငွေလွှဲအကောင့်များ စီမံခန့်ခွဲမှု*
-
-*Current Payment Information:*
-
-📱 *KPay:*
-   - Name: {SYSTEM_SETTINGS.get('kpay_name', 'AUNG THU HTWE')}
-   - Phone: {SYSTEM_SETTINGS.get('kpay_phone', '09789999368')}
-
-💙 *WavePay:*
-   - Name: {SYSTEM_SETTINGS.get('wavepay_name', 'AUNG THU HTWE')}
-   - Phone: {SYSTEM_SETTINGS.get('wavepay_phone', '09789999368')}
-
-အောက်ပါခလုတ်များဖြင့် ပြင်ဆင်နိုင်ပါသည်:
-"""
+async def view_prizes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Users can view prizes with beautiful display"""
+    prize_display = get_prizes_display()
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎰 ကံစမ်းမဲ ဝယ်ယူရန်", callback_data="buy_tickets")],
+        [InlineKeyboardButton("📢 Official Channel", url=OFFICIAL_CHANNEL)]
+    ])
     
     await update.message.reply_text(
-        payment_text,
-        reply_markup=get_payment_management_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def handle_contact_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin access required")
-        return
-        
-    contact_text = f"""
-📞 *အဆက်အသွယ် အချက်အလက်များ*
-
-*Current Contact Information:*
-
-👤 *Admin Name:* {SYSTEM_SETTINGS.get('admin_name', 'AUNG THU HTWE')}
-📞 *Admin Phone:* {SYSTEM_SETTINGS.get('admin_phone', '09789999368')}
-
-အောက်ပါခလုတ်များဖြင့် ပြင်ဆင်နိုင်ပါသည်:
-"""
-    
-    await update.message.reply_text(
-        contact_text,
-        reply_markup=get_contact_management_keyboard(),
+        prize_display,
+        reply_markup=keyboard,
         parse_mode=ParseMode.MARKDOWN
     )
 
 # ==============================
-# CHANNEL & GROUP HANDLER
+# ADMIN REPLY KEYBOARD
 # ==============================
-async def handle_channel_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Channel and Group information"""
-    channel_text = f"""
-📢 *Channel & Group Links*
-
-*ကျေးဇူးပြု၍ အောက်ပါ Channel များကို Join ပါ:*
-
-• 💰 *ငွေသွင်း/ငွေထုတ် Alarms Channel* - ငွေကြေးကိစ္စများအတွက်
-• 📢 *Official Channel* - အဓိကသတင်းများအတွက်
-
-Join ပြီးမှ ဆက်လက်အသုံးပြုနိုင်ပါမည်။
-"""
-    
-    await update.message.reply_text(
-        channel_text,
-        reply_markup=get_channel_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
-    )
+def get_admin_reply_keyboard():
+    return ReplyKeyboardMarkup([
+        ["📊 စာရင်းဇယားများ", "👥 သုံးစွဲသူများ"],
+        ["🎯 ကံစမ်းမဲ စီမံခန့်ခွဲမှု", "🏆 ဆုကြေးများ"],
+        ["💰 ငွေလွှဲအကောင့်များ", "📞 အဆက်အသွယ်"],
+        ["🚨 Alarm System", "🏠 Main Menu"]
+    ], resize_keyboard=True, persistent=True)
 
 # ==============================
-# SET PAYMENT INFO
+# CONVERSATION HANDLER FOR PRIZE MANAGEMENT
 # ==============================
-async def set_kpay_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        f"📱 *KPay Account Name သတ်မှတ်ရန်*\n\n"
-        f"လက်ရှိ KPay Name: {SYSTEM_SETTINGS.get('kpay_name', 'AUNG THU HTWE')}\n\n"
-        f"ကျေးဇူးပြု၍ အသစ် KPay Account Name ထည့်ပါ:"
-    )
-    return KPAY_NAME
-
-async def set_kpay_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        f"📞 *KPay Phone Number သတ်မှတ်ရန်*\n\n"
-        f"လက်ရှိ KPay Phone: {SYSTEM_SETTINGS.get('kpay_phone', '09789999368')}\n\n"
-        f"ကျေးဇူးပြု၍ အသစ် KPay Phone Number ထည့်ပါ (09XXXXXXXXX):"
-    )
-    return KPAY_PHONE
-
-async def set_wavepay_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        f"💙 *WavePay Account Name သတ်မှတ်ရန်*\n\n"
-        f"လက်ရှိ WavePay Name: {SYSTEM_SETTINGS.get('wavepay_name', 'AUNG THU HTWE')}\n\n"
-        f"ကျေးဇူးပြု၍ အသစ် WavePay Account Name ထည့်ပါ:"
-    )
-    return WAVEPAY_NAME
-
-async def set_wavepay_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        f"📞 *WavePay Phone Number သတ်မှတ်ရန်*\n\n"
-        f"လက်ရှိ WavePay Phone: {SYSTEM_SETTINGS.get('wavepay_phone', '09789999368')}\n\n"
-        f"ကျေးဇူးပြု၍ အသစ် WavePay Phone Number ထည့်ပါ (09XXXXXXXXX):"
-    )
-    return WAVEPAY_PHONE
-
-async def set_admin_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        f"👤 *Admin Name သတ်မှတ်ရန်*\n\n"
-        f"လက်ရှိ Admin Name: {SYSTEM_SETTINGS.get('admin_name', 'AUNG THU HTWE')}\n\n"
-        f"ကျေးဇူးပြု၍ အသစ် Admin Name ထည့်ပါ:"
-    )
-    return ADMIN_NAME
-
-async def set_admin_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        f"📞 *Admin Phone သတ်မှတ်ရန်*\n\n"
-        f"လက်ရှိ Admin Phone: {SYSTEM_SETTINGS.get('admin_phone', '09789999368')}\n\n"
-        f"ကျေးဇူးပြု၍ အသစ် Admin Phone ထည့်ပါ (09XXXXXXXXX):"
-    )
-    return ADMIN_PHONE
-
-# ==============================
-# HANDLE INPUTS
-# ==============================
-async def handle_kpay_name_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin access required")
-        return ConversationHandler.END
-        
-    kpay_name = update.message.text.strip()
-    if not kpay_name:
-        await update.message.reply_text("❌ KPay Account Name ထည့်သွင်းရန်လိုအပ်ပါသည်။")
-        return KPAY_NAME
-    
-    db.save_setting('kpay_name', kpay_name)
-    await update.message.reply_text(f"✅ *KPay Account Name သတ်မှတ်ပြီးပါပြီ!*\n\nအသစ် KPay Name: {kpay_name}", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-async def handle_kpay_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin access required")
-        return ConversationHandler.END
-        
-    kpay_phone = update.message.text.strip()
-    if not kpay_phone.startswith('09') or len(kpay_phone) != 11 or not kpay_phone[1:].isdigit():
-        await update.message.reply_text("❌ မှားယွင်းနေပါသည်! ကျေးဇူးပြု၍ မှန်ကန်သောဖုန်းနံပါတ်ထည့်ပါ (09XXXXXXXXX):")
-        return KPAY_PHONE
-    
-    db.save_setting('kpay_phone', kpay_phone)
-    await update.message.reply_text(f"✅ *KPay Phone Number သတ်မှတ်ပြီးပါပြီ!*\n\nအသစ် KPay Phone: {kpay_phone}", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-async def handle_wavepay_name_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin access required")
-        return ConversationHandler.END
-        
-    wavepay_name = update.message.text.strip()
-    if not wavepay_name:
-        await update.message.reply_text("❌ WavePay Account Name ထည့်သွင်းရန်လိုအပ်ပါသည်။")
-        return WAVEPAY_NAME
-    
-    db.save_setting('wavepay_name', wavepay_name)
-    await update.message.reply_text(f"✅ *WavePay Account Name သတ်မှတ်ပြီးပါပြီ!*\n\nအသစ် WavePay Name: {wavepay_name}", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-async def handle_wavepay_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin access required")
-        return ConversationHandler.END
-        
-    wavepay_phone = update.message.text.strip()
-    if not wavepay_phone.startswith('09') or len(wavepay_phone) != 11 or not wavepay_phone[1:].isdigit():
-        await update.message.reply_text("❌ မှားယွင်းနေပါသည်! ကျေးဇူးပြု၍ မှန်ကန်သောဖုန်းနံပါတ်ထည့်ပါ (09XXXXXXXXX):")
-        return WAVEPAY_PHONE
-    
-    db.save_setting('wavepay_phone', wavepay_phone)
-    await update.message.reply_text(f"✅ *WavePay Phone Number သတ်မှတ်ပြီးပါပြီ!*\n\nအသစ် WavePay Phone: {wavepay_phone}", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-async def handle_admin_name_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin access required")
-        return ConversationHandler.END
-        
-    admin_name = update.message.text.strip()
-    if not admin_name:
-        await update.message.reply_text("❌ Admin Name ထည့်သွင်းရန်လိုအပ်ပါသည်။")
-        return ADMIN_NAME
-    
-    db.save_setting('admin_name', admin_name)
-    await update.message.reply_text(f"✅ *Admin Name သတ်မှတ်ပြီးပါပြီ!*\n\nအသစ် Admin Name: {admin_name}", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-async def handle_admin_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin access required")
-        return ConversationHandler.END
-        
-    admin_phone = update.message.text.strip()
-    if not admin_phone.startswith('09') or len(admin_phone) != 11 or not admin_phone[1:].isdigit():
-        await update.message.reply_text("❌ မှားယွင်းနေပါသည်! ကျေးဇူးပြု၍ မှန်ကန်သောဖုန်းနံပါတ်ထည့်ပါ (09XXXXXXXXX):")
-        return ADMIN_PHONE
-    
-    db.save_setting('admin_phone', admin_phone)
-    await update.message.reply_text(f"✅ *Admin Phone သတ်မှတ်ပြီးပါပြီ!*\n\nအသစ် Admin Phone: {admin_phone}", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-# ==============================
-# DEPOSIT FUNCTION
-# ==============================
-async def handle_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    deposit_text = f"""
-💵 *ငွေသွင်းရန်*
-
-*ငွေလွှဲနည်းလမ်းများ:*
-
-📱 *KPay:*
-   - Name: {SYSTEM_SETTINGS.get('kpay_name', 'AUNG THU HTWE')}
-   - Phone: {SYSTEM_SETTINGS.get('kpay_phone', '09789999368')}
-
-💙 *WavePay:*
-   - Name: {SYSTEM_SETTINGS.get('wavepay_name', 'AUNG THU HTWE')}
-   - Phone: {SYSTEM_SETTINGS.get('wavepay_phone', '09789999368')}
-
-*Contact:*
-👤 Admin: {SYSTEM_SETTINGS.get('admin_name', 'AUNG THU HTWE')}
-📞 Phone: {SYSTEM_SETTINGS.get('admin_phone', '09789999368')}
-
-*Channel Links:*
-💰 ငွေသွင်း/ထုတ် Alarms: {PAYMENT_CHANNEL}
-
-ငွေလွှဲပြီးပါက Screenshot ပို့ပါ
-
-*Admin မှ အတည်ပြုပြီးမှ Balance တက်မည်*
-"""
-    await update.message.reply_text(deposit_text, parse_mode=ParseMode.MARKDOWN)
-
-# ==============================
-# MAIN HANDLER
-# ==============================
-async def handle_reply_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    user_id = update.effective_user.id
-    
-    if is_admin(user_id):
-        if text == "💰 ငွေလွှဲအကောင့်များ":
-            await handle_payment_management(update, context)
-            return
-        elif text == "📞 အဆက်အသွယ်":
-            await handle_contact_management(update, context)
-            return
-        elif text == "🏠 Main Menu":
-            await start_command(update, context)
-            return
-    
-    if text == "💵 ငွေသွင်းရန်":
-        await handle_deposit(update, context)
-    elif text == "👤 My Profile":
-        await handle_my_profile(update, context)
-    elif text == "🎰 ကံစမ်းမဲ ဝယ်ယူရန်":
-        await handle_buy_tickets(update, context)
-    elif text == "📢 Channel & Group":
-        await handle_channel_group(update, context)
-
-# ==============================
-# INLINE BUTTON HANDLERS
-# ==============================
-async def handle_inline_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    
-    if data == "back_to_admin":
-        if is_admin(query.from_user.id):
-            await start_command(update, context)
-        else:
-            await query.message.reply_text("❌ Admin access required")
-    elif data == "back_to_main":
-        await start_command(update, context)
-
-# ==============================
-# PLACEHOLDER FUNCTIONS
-# ==============================
-async def handle_my_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👤 My Profile - Under development")
-
-async def handle_buy_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎰 Buy Tickets - Under development")
-
-# ==============================
-# CONVERSATION HANDLER
-# ==============================
-def get_conversation_handler():
+def get_prize_conversation_handler():
     return ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(set_kpay_name, pattern='^set_kpay_name$'),
-            CallbackQueryHandler(set_kpay_phone, pattern='^set_kpay_phone$'),
-            CallbackQueryHandler(set_wavepay_name, pattern='^set_wavepay_name$'),
-            CallbackQueryHandler(set_wavepay_phone, pattern='^set_wavepay_phone$'),
-            CallbackQueryHandler(set_admin_name, pattern='^set_admin_name$'),
-            CallbackQueryHandler(set_admin_phone, pattern='^set_admin_phone$'),
+            CallbackQueryHandler(edit_1st_prize, pattern='^edit_1st_prize$'),
+            CallbackQueryHandler(edit_2nd_prize, pattern='^edit_2nd_prize$'),
+            CallbackQueryHandler(edit_3rd_prize, pattern='^edit_3rd_prize$'),
+            CallbackQueryHandler(edit_4th_prize, pattern='^edit_4th_prize$'),
+            CallbackQueryHandler(edit_other_prize, pattern='^edit_other_prize$'),
         ],
         states={
-            KPAY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_kpay_name_input)],
-            KPAY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_kpay_phone_input)],
-            WAVEPAY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wavepay_name_input)],
-            WAVEPAY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wavepay_phone_input)],
-            ADMIN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_name_input)],
-            ADMIN_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_phone_input)],
+            PRIZE_NAME_1ST: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_name_1st_input)],
+            PRIZE_AMOUNT_1ST: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_amount_1st_input)],
+            PRIZE_NAME_2ND: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_name_2nd_input)],
+            PRIZE_AMOUNT_2ND: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_amount_2nd_input)],
+            PRIZE_NAME_3RD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_name_3rd_input)],
+            PRIZE_AMOUNT_3RD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_amount_3rd_input)],
+            PRIZE_NAME_4TH: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_name_4th_input)],
+            PRIZE_AMOUNT_4TH: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_amount_4th_input)],
+            PRIZE_NAME_OTHER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_name_other_input)],
+            PRIZE_AMOUNT_OTHER: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prize_amount_other_input)],
         },
         fallbacks=[]
     )
@@ -570,18 +643,20 @@ def get_conversation_handler():
 # ==============================
 def main():
     try:
-        app = Application.builder().token(BOT_TOKEN).build()
+        application = Application.builder().token(BOT_TOKEN).build()
         
         # Add handlers
-        app.add_handler(CommandHandler("start", start_command))
-        app.add_handler(get_conversation_handler())
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply_buttons))
-        app.add_handler(CallbackQueryHandler(handle_inline_buttons))
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("prizes", view_prizes_command))
+        application.add_handler(get_prize_conversation_handler())
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply_buttons))
+        application.add_handler(CallbackQueryHandler(handle_inline_buttons))
         
-        print("🤖 LUCKY DRAW MYANMAR Bot starting...")
-        print(f"👤 Admin ID: {ADMIN_USERS[0]}")
-        print(f"📱 KPay/WavePay: {SYSTEM_SETTINGS['kpay_name']} - {SYSTEM_SETTINGS['kpay_phone']}")
-        app.run_polling()
+        print("🤖 LUCKY DRAW MYANMAR Bot with Prize Management starting...")
+        print("🏆 Prize Management: Activated")
+        print("🎨 Beautiful Prize Display: Enabled")
+        
+        application.run_polling()
         
     except Exception as e:
         print(f"❌ Error starting bot: {e}")
