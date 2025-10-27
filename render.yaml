@@ -1,6 +1,10 @@
+databases:
+  - name: lottery_db
+    plan: free
+
 services:
   - type: worker
-    name: lottery-bot-worker
+    name: lottery-bot
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
