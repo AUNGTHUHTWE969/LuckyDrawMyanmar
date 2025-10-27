@@ -1,11 +1,16 @@
 services:
   - type: web
-    name: lucky-draw-myanmar
+    name: lottery-bot
     env: python
     plan: free
-    branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn bot:flask_app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 60
+    startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
-        value: "8444084929:AAGhso9BSTUkKj8jmrEhKSHmIzg6BvUoYrk"
+        value: 8444084929:AAEIkrCAeuNjSHVUCYE9AEpg6IFqE52rNxc
+      - key: ADMIN_IDS
+        value: 8070878424
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lottery_db
+          property: connectionString
