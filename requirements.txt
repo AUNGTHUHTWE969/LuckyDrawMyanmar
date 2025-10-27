@@ -4,3 +4,8 @@ gunicorn
 psycopg2-binary
 SQLAlchemy
 python-dotenv
+python-telegram-bot==20.7
+schedule
+pytz
+psycopg2-binary
+python-dotenv
