@@ -1,9 +1,8 @@
 import os
 import logging
-import random
 import asyncio
 from datetime import datetime
-from flask import Flask, request, jsonify
+import random
 
 import psycopg2
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -23,40 +22,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Flask app for Render
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def home():
-    return jsonify({"status": "Lucky Draw Bot is running!", "timestamp": datetime.now().isoformat()})
-
-@flask_app.route('/health')
-def health():
-    return jsonify({"status": "healthy"})
-
-# Rest of your existing bot code continues here...
 class Config:
     BOT_TOKEN = os.getenv('BOT_TOKEN')
     ADMIN_IDS = [int(x) for x in os.getenv('ADMIN_IDS', '8070878424').split(',')]
-    ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', '@luckydrawmyanmar')
-    ANNOUNCEMENT_CHANNEL = os.getenv('ANNOUNCEMENT_CHANNEL', '@luckydrawmyanmarofficial')
-    PAYMENT_LOG_CHANNEL = os.getenv('PAYMENT_LOG_CHANNEL', '-1002141899845')
     DATABASE_URL = os.getenv('DATABASE_URL')
-    
-    DAILY_DRAW_TIME = "18:00"
-    MAX_TICKETS_PER_USER = 50
     TICKET_PRICE = 1000
-    
-    PAYMENT_METHODS = {
-        "KPay": {
-            "name": os.getenv('KPAY_NAME', 'AUNG THU HTWE'),
-            "phone": os.getenv('KPAY_PHONE', '09789999368')
-        },
-        "WavePay": {
-            "name": os.getenv('WAVEPAY_NAME', 'AUNG THU HTWE'),
-            "phone": os.getenv('WAVEPAY_PHONE', '09789999368')
-        }
-    }
 
 class DatabaseManager:
     def __init__(self):
@@ -69,11 +39,12 @@ class DatabaseManager:
         try:
             if Config.DATABASE_URL:
                 self.connection = psycopg2.connect(Config.DATABASE_URL, sslmode='require')
+                logger.info("✅ PostgreSQL database connected successfully")
             else:
                 # Fallback to SQLite for local development
                 import sqlite3
                 self.connection = sqlite3.connect('lottery.db', check_same_thread=False)
-            logger.info("✅ Database connected successfully")
+                logger.info("✅ SQLite database connected successfully")
         except Exception as e:
             logger.error(f"❌ Database connection failed: {e}")
             raise
@@ -89,15 +60,8 @@ class DatabaseManager:
                     user_id BIGINT PRIMARY KEY,
                     username TEXT,
                     first_name TEXT,
-                    last_name TEXT DEFAULT '',
-                    phone TEXT DEFAULT '',
                     balance DECIMAL DEFAULT 0,
-                    total_spent DECIMAL DEFAULT 0,
-                    total_won DECIMAL DEFAULT 0,
-                    tickets_bought INTEGER DEFAULT 0,
-                    join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    status TEXT DEFAULT 'active'
+                    join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
@@ -106,11 +70,8 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS tickets (
                     id SERIAL PRIMARY KEY,
                     user_id BIGINT,
-                    username TEXT,
                     amount DECIMAL,
-                    purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    status TEXT DEFAULT 'active',
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                    purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
@@ -120,8 +81,46 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"❌ Database initialization failed: {e}")
             self.connection.rollback()
-
-    # ... (ကျန်တဲ့ database methods တွေ ဒီမှာထည့်ပါ)
+    
+    def create_user(self, user_id: int, username: str, first_name: str):
+        """Create a new user"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('''
+                INSERT INTO users (user_id, username, first_name)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id) DO NOTHING
+            ''', (user_id, username, first_name))
+            self.connection.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error creating user: {e}")
+            return False
+    
+    def get_user(self, user_id: int):
+        """Get user by ID"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
+            return cursor.fetchone()
+        except Exception as e:
+            logger.error(f"Error getting user: {e}")
+            return None
+    
+    def update_balance(self, user_id: int, amount: float):
+        """Update user balance"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "UPDATE users SET balance = balance + %s WHERE user_id = %s",
+                (amount, user_id)
+            )
+            self.connection.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error updating balance: {e}")
+            self.connection.rollback()
+            return False
 
 class LotteryBot:
     def __init__(self):
@@ -133,12 +132,10 @@ class LotteryBot:
         user = update.effective_user
         
         # Create user if not exists
-        self.db.create_user(
-            user.id,
-            user.username,
-            user.first_name,
-            getattr(user, 'last_name', '')
-        )
+        self.db.create_user(user.id, user.username, user.first_name)
+        
+        user_data = self.db.get_user(user.id)
+        balance = user_data[3] if user_data else 0
         
         welcome_text = f"""
 🎉 **Lucky Draw Myanmar မှ ကြိုဆိုပါတယ်!**
@@ -147,10 +144,9 @@ class LotteryBot:
 
 **ကံစမ်းမဲအချက်အလက်:**
 🎫 ကံစမ်းမဲဈေး: {Config.TICKET_PRICE:,} ကျပ်
-⏰ ကံစမ်းမဲဖွင့်ချိန်: နေ့စဉ် {Config.DAILY_DRAW_TIME}
-💳 ငွေသွင်းနည်း: KPay, WavePay
+💰 သင့်လက်ကျန်ငွေ: {balance:,.0f} ကျပ်
 
-**အောက်ပါ button များကိုနှိပ်၍ ဆက်လက်လုပ်ဆောင်ပါ**
+ကျေးဇူးပြု၍ အောက်ပါ button များကိုနှိပ်၍ ဆက်လက်လုပ်ဆောင်ပါ
 
 #LUCKYDRAWMYANMAR
         """
@@ -163,30 +159,160 @@ class LotteryBot:
     
     def get_main_menu(self, user_id: int = None):
         """Get main menu keyboard"""
-        is_admin = self.db.is_admin(user_id) if user_id else False
-        
         keyboard = [
             [InlineKeyboardButton("🎫 ကံစမ်းမဲဝယ်ယူရန်", callback_data="buy_ticket")],
             [InlineKeyboardButton("💰 လက်ကျန်ငွေကြည့်ရန်", callback_data="check_balance")],
-            [InlineKeyboardButton("💳 ငွေသွင်းရန်", callback_data="deposit_money")],
-            [InlineKeyboardButton("🏧 ငွေထုတ်ရန်", callback_data="withdraw_money")],
             [InlineKeyboardButton("📊 ကိုယ်ရေးအချက်အလက်", callback_data="profile")]
         ]
         
-        if is_admin:
-            keyboard.append([InlineKeyboardButton("👑 Admin Panel", callback_data="admin_panel")])
-        
         return InlineKeyboardMarkup(keyboard)
+    
+    def get_ticket_menu(self):
+        """Get ticket purchase menu"""
+        keyboard = [
+            [InlineKeyboardButton("1 ကံစမ်းမဲ", callback_data="buy_1")],
+            [InlineKeyboardButton("5 ကံစမ်းမဲ", callback_data="buy_5")],
+            [InlineKeyboardButton("10 ကံစမ်းမဲ", callback_data="buy_10")],
+            [InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle callback queries"""
+        query = update.callback_query
+        await query.answer()
+        
+        user = query.from_user
+        data = query.data
+        
+        if data == "main_menu":
+            await query.edit_message_text(
+                "**မူလ Menu**\n\nကျေးဇူးပြု၍ ရွေးချယ်ပါ:",
+                parse_mode='Markdown',
+                reply_markup=self.get_main_menu(user.id)
+            )
+        
+        elif data == "buy_ticket":
+            await query.edit_message_text(
+                f"**ကံစမ်းမဲဝယ်ယူရန်**\n\n🎫 ကံစမ်းမဲတစ်ခုလျှင်: {Config.TICKET_PRICE:,} ကျပ်",
+                parse_mode='Markdown',
+                reply_markup=self.get_ticket_menu()
+            )
+        
+        elif data == "check_balance":
+            user_data = self.db.get_user(user.id)
+            balance = user_data[3] if user_data else 0
+            
+            await query.edit_message_text(
+                f"💰 **သင့်လက်ကျန်ငွေ**\n\nလက်ကျန်ငွေ: {balance:,.0f} ကျပ်",
+                parse_mode='Markdown',
+                reply_markup=self.get_main_menu(user.id)
+            )
+        
+        elif data == "profile":
+            user_data = self.db.get_user(user.id)
+            if user_data:
+                profile_text = f"""
+📊 **ကိုယ်ရေးအချက်အလက်**
 
-    # ... (ကျန်တဲ့ bot methods တွေ ဒီမှာထည့်ပါ)
+👤 အမည်: {user_data[2]}
+🆔 အိုင်ဒီ: {user_data[0]}
+💰 လက်ကျန်ငွေ: {user_data[3]:,.0f} ကျပ်
+📅 အကောင့်ဖွင့်သည့်ရက်: {user_data[4][:10] if user_data[4] else 'N/A'}
 
+#LUCKYDRAWMYANMAR
+                """
+                
+                await query.edit_message_text(
+                    profile_text,
+                    parse_mode='Markdown',
+                    reply_markup=self.get_main_menu(user.id)
+                )
+        
+        elif data.startswith("buy_"):
+            if data == "buy_1":
+                ticket_count = 1
+            elif data == "buy_5":
+                ticket_count = 5
+            elif data == "buy_10":
+                ticket_count = 10
+            else:
+                ticket_count = 1
+            
+            await self.process_ticket_purchase(user, ticket_count, query)
+    
+    async def process_ticket_purchase(self, user, ticket_count: int, query):
+        """Process ticket purchase"""
+        try:
+            total_amount = ticket_count * Config.TICKET_PRICE
+            user_data = self.db.get_user(user.id)
+            
+            if not user_data:
+                await query.edit_message_text(
+                    "❌ User information not found. Please start the bot again.",
+                    reply_markup=self.get_main_menu(user.id)
+                )
+                return
+            
+            balance = user_data[3]
+            
+            if balance < total_amount:
+                await query.edit_message_text(
+                    f"❌ လက်ကျန်ငွေမလုံလောက်ပါ။\nလက်ရှိလက်ကျန်ငွေ: {balance:,.0f} ကျပ်\nလိုအပ်ငွေ: {total_amount:,.0f} ကျပ်",
+                    reply_markup=self.get_main_menu(user.id)
+                )
+                return
+            
+            # Update balance
+            self.db.update_balance(user.id, -total_amount)
+            
+            # Create ticket records
+            cursor = self.db.connection.cursor()
+            for _ in range(ticket_count):
+                cursor.execute(
+                    "INSERT INTO tickets (user_id, amount) VALUES (%s, %s)",
+                    (user.id, Config.TICKET_PRICE)
+                )
+            
+            self.db.connection.commit()
+            
+            # Get updated balance
+            user_data = self.db.get_user(user.id)
+            new_balance = user_data[3]
+            
+            success_message = f"""
+✅ ကံစမ်းမဲ {ticket_count} ခု ဝယ်ယူပြီးပါပြီ!
+
+📊 အချက်အလက်များ:
+• ဝယ်ယူသောကံစမ်းမဲ: {ticket_count} ခု
+• ကံစမ်းမဲတစ်ခုဈေး: {Config.TICKET_PRICE:,} ကျပ်
+• စုစုပေါင်းကျသင့်ငွေ: {total_amount:,.0f} ကျပ်
+• လက်ကျန်ငွေ: {new_balance:,.0f} ကျပ်
+
+🎊 ကံကောင်းပါစေ!
+
+#LUCKYDRAWMYANMAR
+            """
+            
+            await query.edit_message_text(
+                success_message,
+                parse_mode='Markdown',
+                reply_markup=self.get_main_menu(user.id)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing ticket purchase: {e}")
+            await query.edit_message_text(
+                "❌ ကံစမ်းမဲဝယ်ယူရာတွင် အမှားဖြစ်နေသည်",
+                reply_markup=self.get_main_menu(user.id)
+            )
+    
     def setup_handlers(self):
         """Setup bot handlers"""
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CallbackQueryHandler(self.handle_callback))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
     
-    async def run_bot(self):
+    async def run(self):
         """Run the bot"""
         if not Config.BOT_TOKEN:
             logger.error("BOT_TOKEN environment variable is required!")
@@ -197,41 +323,6 @@ class LotteryBot:
         
         logger.info("🤖 Bot is starting...")
         await self.application.run_polling()
-
-# Create bot instance
-bot = LotteryBot()
-
-def run_bot():
-    """Run the bot in an async context"""
-    asyncio.run(bot.run_bot())
-
-if __name__ == "__main__":
-    # Start both Flask app and Telegram bot
-    import threading
-    
-    # Start bot in a separate thread
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    
-    # Start Flask app
-    port = int(os.environ.get('PORT', 5000))
-    flask_app.run(host='0.0.0.0', port=port)
-    import os
-import logging
-import asyncio
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# ... (သင့်ရဲ့ မူရင်း bot code ကို ဒီမှာထည့်ပါ)
 
 async def main():
     """Main function"""
