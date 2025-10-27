@@ -1,43 +1,29 @@
 # Lucky Draw Myanmar Bot
 
-A Telegram lottery bot deployed on Render with full payment integration.
+Telegram Lottery Bot for Myanmar Users
 
 ## Features
 
-- 🎫 Ticket purchasing with confirmation system
-- 💰 KPay and WavePay integration  
-- 👑 Admin panel for management
-- ⏰ Configurable draw times
-- 📊 Real-time transaction tracking
-- 🏆 Automatic winner selection
+- 🎫 Lottery Ticket System
+- 💳 Payment Integration (KPay, WavePay)
+- 🏧 Withdrawal System
+- 👑 Admin Panel
+- 📊 User Management
+- 💰 Balance System
 
-## Deployment on Render
+## Deployment
 
-1. Fork this repository to your GitHub account
-2. Go to [Render.com](https://render.com) and create account
-3. Click "New +" and select "Web Service"
-4. Connect your GitHub repository
-5. Use these settings:
-   - **Name**: `lucky-draw-bot`
-   - **Environment**: `Python`
-   - **Region**: `Singapore` (or your preferred region)
-   - **Branch**: `main`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python bot.py`
+### Render Deployment
 
-6. Add environment variables:
-   - `BOT_TOKEN`: Your Telegram bot token from BotFather
+1. Fork this repository
+2. Create a new Web Service on Render
+3. Connect your GitHub repository
+4. Set environment variables
+5. Deploy
 
-7. Click "Create Web Service"
+### Environment Variables
 
-## Local Development
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Set environment variable
-export BOT_TOKEN=your_bot_token_here
-
-# Run locally
-python bot.py
+```env
+BOT_TOKEN=8444084929:AAEIkrCAeuNjSHVUCYE9AEpg6IFqE52rNxc
+ADMIN_IDS=8070878424
+DATABASE_URL=postgresql://user:pass@host:port/dbname
