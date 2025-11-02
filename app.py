@@ -42,7 +42,7 @@ def main_menu_keyboard():
     keyboard = [
         ["👤 My Profile", "🎫 ကံစမ်းမဲ ဝယ်ယူရန်"],
         ["💰 ငွေသွင်း", "📤 ငွေထုတ်"],
-        ["📊 မှတ်တမ်းကြည့်ရန️်", "❓ FAQ"],
+        ["📊 မှတ်တမ်းကြည့်ရန်", "❓ FAQ"],
         ["🏠 ပင်မမီနူး"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
@@ -69,7 +69,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users[user_id] = {
         'name': update.effective_user.first_name,
         'phone': '09-XXXXXXX',
-        'balance': 0,
+        'balance': 10000,  # Starting balance
         'registered_at': '2024-01-01',
         'referral_code': f"REF{user_id}"
     }
@@ -78,7 +78,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ မှတ်ပုံတင်ပြီးပါပြီ {update.effective_user.first_name}!\n\n"
         f"👤 အမည်: {update.effective_user.first_name}\n"
         f"📞 ဖုန်း: 09-XXXXXXX\n"
-        f"💰 လက်ကျန်ငွေ: 0 Ks\n"
+        f"💰 လက်ကျန်ငွေ: 10,000 Ks\n"
         f"🔗 Referral Code: REF{user_id}\n\n"
         "🎉 ယခု ကံစမ်းမဲများ ဝယ်ယူနိုင်ပါပြီ!",
         reply_markup=main_menu_keyboard()
@@ -117,8 +117,14 @@ async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "💰 **ငွေသွင်းရန်**\n\n"
         "ကျေးဇူးပြု၍ ငွေသွင်းနည်းလမ်းရွေးပါ:\n\n"
-        "📱 KPay - 09789999368\n"
-        "📱 WavePay - 09789999368\n\n"
+        "📱 **KPay**\n"
+        "├ အကောင့်အမည်: AUNG THU HTWE\n"
+        "├ ဖုန်းနံပါတ်: 09789999368\n"
+        "└ လွှဲရမည့်အမည်: AUNG THU HTWE\n\n"
+        "📱 **WavePay**\n" 
+        "├ အကောင့်အမည်: AUNG THU HTWE\n"
+        "├ ဖုန်းနံပါတ်: 09789999368\n"
+        "└ လွှဲရမည့်အမည်: AUNG THU HTWE\n\n"
         "ငွေသွင်းပြီးပါက Screenshot ပို့ပါ။",
         parse_mode='Markdown',
         reply_markup=main_menu_keyboard()
@@ -159,10 +165,10 @@ async def lottery(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎫 **ကံစမ်းမဲ ဝယ်ယူရန်**\n\n"
         f"💳 သင့်လက်ကျန်ငွေ: {user_data['balance']:,} Ks\n\n"
         "ကျေးဇူးပြု၍ ရွေးချယ်ပါ:\n\n"
-        "• 1 Ticket - 1,000 Ks\n"
-        "• 2 Tickets - 1,800 Ks\n" 
-        "• 5 Tickets - 4,000 Ks\n"
-        "• 7 Tickets - 5,600 Ks\n\n"
+        "🎫 1 Ticket - 1,000 Ks\n"
+        "🎫 2 Tickets - 1,800 Ks\n" 
+        "🎫 5 Tickets - 4,000 Ks\n"
+        "🎫 7 Tickets - 5,600 Ks\n\n"
         "မိမိကြိုက်နှစ်သက်ရာ ဝယ်ယူနိုင်ပါသည်။",
         parse_mode='Markdown',
         reply_markup=main_menu_keyboard()
@@ -181,13 +187,14 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❓ **FAQ**\n\n"
         "အမေးများသောမေးခွန်းများ:\n\n"
-        "Q: မှတ်ပုံတင်နည်း\n"
+        "**Q: မှတ်ပုံတင်နည်း**\n"
         "A: /register ကိုနှိပ်ပါ\n\n"
-        "Q: ငွေသွင်းနည်း\n"
+        "**Q: ငွေသွင်းနည်း**\n"
         "A: KPay/WavePay ဖြင့်သွင်းနိုင်ပါသည်\n\n"
-        "Q: ငွေထုတ်နည်း\n"
+        "**Q: ငွေထုတ်နည်း**\n"
         "A: လက်ကျန်ငွေရှိပါက ထုတ်နိုင်ပါသည်\n\n"
         "အခြားမေးခွန်းများအတွက် Admin နှင့်ဆက်သွယ်ပါ။",
+        parse_mode='Markdown',
         reply_markup=main_menu_keyboard()
     )
 
@@ -202,7 +209,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await deposit(update, context)
     elif text == "📤 ငွေထုတ်":
         await withdraw(update, context)
-    elif text == "📊 မှတ်တမ်းကြည့်ရန️်":
+    elif text == "📊 မှတ်တမ်းကြည့်ရန်":
         await history(update, context)
     elif text == "❓ FAQ":
         await faq(update, context)
@@ -225,11 +232,11 @@ async def main():
         logger.error("❌ BOT_TOKEN not found in environment variables!")
         return
     
+    # Start web server for health checks
+    web_runner = await start_web_server()
+    
     try:
-        # Start web server for health checks
-        web_runner = await start_web_server()
-        
-        # Create bot application - FIXED: Use correct version for python-telegram-bot v20.x
+        # Create bot application
         application = Application.builder().token(BOT_TOKEN).build()
         
         # Add handlers
@@ -239,34 +246,38 @@ async def main():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_error_handler(error_handler)
         
-        # Start bot - FIXED: Correct way to start for v20.x
+        # Start the bot
         await application.initialize()
         await application.start()
+        logger.info("✅ Bot application started")
         
-        # Start polling
-        await application.updater.start_polling()
+        # Start polling with error handling
+        try:
+            await application.updater.start_polling()
+            logger.info("✅ Bot polling started successfully")
+        except Exception as poll_error:
+            logger.error(f"❌ Polling error: {poll_error}")
+            # Try alternative approach
+            await application.updater.start_polling(drop_pending_updates=True)
+            logger.info("✅ Bot polling started with alternative method")
         
-        logger.info("✅ Bot started successfully on Render!")
-        logger.info("📱 Bot is now listening for messages...")
+        logger.info("🤖 Bot is now fully operational!")
         
         # Keep the application running
         while True:
-            await asyncio.sleep(3600)  # Sleep for 1 hour
+            await asyncio.sleep(3600)
             
     except Exception as e:
         logger.error(f"❌ Failed to start bot: {e}")
-        # Don't re-raise the exception to prevent immediate restart loop
-        await asyncio.sleep(60)  # Wait before exiting
+        # Wait before exiting to see the error in logs
+        await asyncio.sleep(10)
     finally:
         # Cleanup
         logger.info("🛑 Shutting down bot...")
         try:
             if 'application' in locals():
-                await application.updater.stop()
                 await application.stop()
                 await application.shutdown()
-            if 'web_runner' in locals():
-                await web_runner.cleanup()
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
 
