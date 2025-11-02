@@ -4,10 +4,19 @@ import datetime
 import random
 import logging
 import os
-from dotenv import load_dotenv
+import asyncio
+from flask import Flask
 
-# Load environment variables
-load_dotenv()
+# Flask app for health check
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Telegram Bot is running!"
+
+@app.route('/health')
+def health():
+    return "✅ OK"
 
 # Logging setup
 logging.basicConfig(
@@ -57,8 +66,6 @@ faq_data = {
     "deposit_answer": "ငွေသွင်းမီနူးမှ ရွေးချယ်ပါ",
     "withdraw_how": "ငွေထုတ်နည်း",
     "withdraw_answer": "ငွေထုတ်မီနူးမှ ရွေးချယ်ပါ",
-    "lottery_how": "ကံစမ်းမဲ ဝယ်ယူနည်း",
-    "lottery_answer": "ကံစမ်းမဲမီနူးမှ ဝယ်ယူနိုင်ပါသည်",
 }
 
 # About Us Database
@@ -113,32 +120,13 @@ def get_pending_transactions():
     pending_txns.sort(key=lambda x: x['created_at'])
     return pending_txns
 
-def get_today_transactions():
-    today = datetime.datetime.now().strftime('%Y-%m-%d')
-    today_txns = []
-    for txn_id, txn_data in transactions.items():
-        if txn_data['created_at'].startswith(today):
-            today_txns.append(txn_data)
-    return today_txns
-
 # Desktop Keyboards
 def main_menu_keyboard():
     keyboard = [
         ["👤 My Profile", "🎫 ကံစမ်းမဲ ဝယ်ယူရန်"],
-        ["🏆 ပြိုင်ပွဲများ ရလဒ်များ", "📊 မှတ်တမ်းကြည့်ရန်"],
+        ["📊 မှတ်တမ်းကြည့်ရန️်", "💳 လက်ကျန်ကြည့်ရန်"],
         ["💰 ငွေသွင်း", "📤 ငွေထုတ်"],
-        ["📢 ကြော်ငြာ အပ်ရန်", "📺 Channel & Group"],
-        ["⚙️ Admin", "👥 Referral", "❓ FAQ"],
-        ["ℹ️ About Us", "🏠 ပင်မမီနူး"]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
-
-def admin_main_keyboard():
-    keyboard = [
-        ["📊 စနစ်စစ်တမ်း", "👥 အသုံးပြုသူများ"],
-        ["💰 ငွေသွင်းအကောင့်များ", "🔍 စောင့်ဆိုင်းငွေလွှဲမှုများ"],
-        ["📺 Channel & Group များ", "📈 ယနေ့အစီရင်ခံ"],
-        ["⚙️ Admin စီမံခန့်ခွဲမှု", "🏠 ပင်မမီနူး"]
+        ["🏠 ပင်မမီနူး"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
@@ -160,24 +148,6 @@ def withdraw_method_inline():
             InlineKeyboardButton("📱 WavePay", callback_data="withdraw_wavepay")
         ],
         [InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def lottery_tickets_inline():
-    keyboard = [
-        [
-            InlineKeyboardButton("1 Ticket", callback_data="buy_1_ticket"),
-            InlineKeyboardButton("2 Tickets", callback_data="buy_2_tickets")
-        ],
-        [
-            InlineKeyboardButton("5 Tickets", callback_data="buy_5_tickets"),
-            InlineKeyboardButton("7 Tickets", callback_data="buy_7_tickets")
-        ],
-        [InlineKeyboardButton("🎫 Custom Tickets", callback_data="buy_custom_tickets")],
-        [
-            InlineKeyboardButton("🔙 Back", callback_data="main_menu"),
-            InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")
-        ]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -272,20 +242,11 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 **Referral Code**
 {user_data['referral_code']}
-
-**Referral Earnings**
-{user_data['total_earnings']:,} Ks
 """
-    
-    keyboard = [
-        [InlineKeyboardButton("🔙 Back", callback_data="main_menu")],
-        [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]
-    ]
     
     await update.message.reply_text(
         message,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        parse_mode='Markdown'
     )
 
 # Deposit System
@@ -383,23 +344,16 @@ async def handle_deposit_amount(update: Update, context: ContextTypes.DEFAULT_TY
 ├ 📱 ငွေသွင်းနည်း: {method.upper()}
 ├ 👤 လွှဲပြောင်းရမည့်အမည်: {account['account_name']}
 ├ 📞 လွှဲပြောင်းရမည့်ဖုန်း: {account['phone_number']}
-├ 👑 လွှဲရမည့်အမည်: **{account['account_holder']}**
 └ 🔢 လုပ်ဆောင်ချက်နံပါတ်: `{txn_id}`
 
 💡 **ကျေးဇူးပြု၍ အောက်ပါအဆင့်များအတိုင်းဆောင်ရွက်ပါ:**
 1. {method.upper()} ဖြင့် ငွေလွှဲပါ
-2. **ငွေလွှဲသည့်သူ၏အမည်ကို {account['account_holder']} အတိုင်းရေးပါ**
-3. ငွေလွှဲ Screenshot ရိုက်ယူပါ
-4. Screenshot ကိုဤဘော့သို့ပို့ပါ
+2. ငွေလွှဲ Screenshot ရိုက်ယူပါ
+3. Screenshot ကိုဤဘော့သို့ပို့ပါ
 
 🕒 **Admin မှစစ်ဆေးအတည်ပြုချိန်:** 2-5 မိနစ်
-
-📞 **အကူအညီလိုပါက Admin နှင့်ဆက်သွယ်ပါ**
 """
         await update.message.reply_text(message)
-        
-        # Notify admins
-        await notify_admins_new_transaction(context, transactions[txn_id])
         
         del context.user_data['pending_deposit']
         
@@ -441,63 +395,17 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
 ├ 💰 ထုတ်ယူမည့်ပမာဏ: {amount:,} Ks
 ├ 📱 ငွေလက်ခံမည့်နည်း: {method.upper()}
 ├ 👤 သင့်အမည်: {user_data['full_name']}
-├ 📞 သင့်ဖုန်းနံပါတ်: {user_data['phone']}
 ├ 💳 လက်ရှိလက်ကျန်: {user_data['balance']:,} Ks
 └ 🔢 လုပ်ဆောင်ချက်နံပါတ်: `{txn_id}`
 
 🕒 **Admin မှစစ်ဆေးအတည်ပြုချိန်:** 2-5 မိနစ်
-
-💡 **ငွေထုတ်ယူမှုအောင်မြင်ပါက သင့်လက်ကျန်:** {user_data['balance'] - amount:,} Ks
-
-📞 **အကူအညီလိုပါက Admin နှင့်ဆက်သွယ်ပါ**
 """
         await update.message.reply_text(message)
-        
-        # Notify admins
-        await notify_admins_new_transaction(context, transactions[txn_id])
         
         del context.user_data['pending_withdraw']
         
     except ValueError:
         await update.message.reply_text("❌ ကျေးဇူးပြု၍ ဂဏန်းဖြစ်သောငွေပမာဏရိုက်ထည့်ပါ")
-
-# Notify Admins of New Transaction
-async def notify_admins_new_transaction(context: ContextTypes.DEFAULT_TYPE, transaction):
-    for admin_id in admins:
-        try:
-            status_emoji = "⏳" if transaction['status'] == 'pending' else "✅" if transaction['status'] == 'approved' else "❌"
-            transaction_type = "ငွေသွင်း" if transaction['type'] == 'deposit' else "ငွေထုတ်"
-            
-            account_info = ""
-            if transaction['type'] == 'deposit':
-                for account in payment_accounts.get(transaction['payment_method'], []):
-                    if account['phone_number'] in [acc['phone_number'] for acc in payment_accounts[transaction['payment_method']]]:
-                        account_info = f"👤 လွှဲရမည့်အမည်: {account['account_holder']}"
-                        break
-            
-            message = f"""
-🆕 **အသစ်ငွေလွှဲမှု**
-
-{status_emoji} **အခြေအနေ:** {transaction['status']}
-👤 **အသုံးပြုသူ:** {transaction['user_name']}
-📞 **ဖုန်း:** {transaction['user_phone']}
-💰 **ပမာဏ:** {transaction['amount']:,} Ks
-📱 **အမျိုးအစား:** {transaction_type}
-💳 **နည်းလမ်း:** {transaction['payment_method'].upper()}
-{account_info}
-🔢 **ငွေလွှဲနံပါတ်:** {transaction['id']}
-⏰ **အချိန်:** {transaction['created_at']}
-
-**Admin စစ်ဆေးရန်:**
-• ငွေလွှဲ Screenshot စစ်ဆေးပါ
-• ငွေလွှဲသူအမည် ကိုက်ညီမှုရှိမရှိစစ်ဆေးပါ
-• ငွေပမာဏ ကိုက်ညီမှုရှိမရှိစစ်ဆေးပါ
-
-/admin ဖြင့်စီမံခန့်ခွဲနိုင်ပါသည်
-"""
-            await context.bot.send_message(chat_id=admin_id, text=message)
-        except Exception as e:
-            logger.error(f"Failed to notify admin {admin_id}: {e}")
 
 # Check Balance
 async def check_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -525,17 +433,9 @@ async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 📝 **မည်သည့်ငွေသွင်း/ထုတ်မှတ်တမ်းမျှမရှိသေးပါ**
 
-💡 **စတင်ငွေသွင်းရန် အောက်ပါခလုတ်ကိုနှိပ်ပါ**
+💡 **စတင်ငွေသွင်းရန် ငွေသွင်းခလုတ်ကိုနှိပ်ပါ**
 """
-        keyboard = [
-            [InlineKeyboardButton("💰 ငွေသွင်းရန်", callback_data="deposit_menu")],
-            [InlineKeyboardButton("💳 လက်ကျန်ကြည့်ရန်", callback_data="check_balance")]
-        ]
-        
-        await update.message.reply_text(
-            message,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await update.message.reply_text(message)
         return
     
     message = f"""
@@ -557,51 +457,12 @@ async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE
         message += f"\n├ 💵 {txn['amount']:,} Ks"
         message += f"\n├ 📱 {txn['payment_method'].upper()}"
         message += f"\n├ 🔢 {txn['id']}"
-        message += f"\n├ 🕒 {txn['created_at']}"
         message += f"\n└ 📊 {status_text}\n"
     
-    if len(user_txns) > 5:
-        message += f"\n📋 ... နှင့် အခြား {len(user_txns) - 5} ခု"
-    
-    keyboard = [
-        [InlineKeyboardButton("💰 ငွေသွင်းရန်", callback_data="deposit_menu"),
-         InlineKeyboardButton("📤 ငွေထုတ်ရန်", callback_data="withdraw_menu")],
-        [InlineKeyboardButton("💳 လက်ကျန်ကြည့်ရန်", callback_data="check_balance"),
-         InlineKeyboardButton("🔄 မှတ်တမ်းပြန်စစ်ရန်", callback_data="transaction_history")]
-    ]
-    
-    await update.message.reply_text(
-        message,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-# Lottery System
-async def lottery_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in users:
-        await update.message.reply_text("❌ ကံစမ်းမဲဝယ်ယူရန် မှတ်ပုံတင်ရန်လိုအပ်ပါသည်")
-        return
-    
-    user_data = users[user_id]
-    
-    message = f"""
-🎫 **ကံစမ်းမဲ ဝယ်ယူရန်**
-
-💳 သင့်လက်ကျန်ငွေ: {user_data['balance']:,} Ks
-
-ကျေးဇူးပြု၍ ရွေးချယ်ပါ:
-"""
-    await update.message.reply_text(
-        message,
-        reply_markup=lottery_tickets_inline()
-    )
+    await update.message.reply_text(message, parse_mode='Markdown')
 
 # Message Handler for Users
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if is_admin(update.effective_user.id):
-        return
-        
     text = update.message.text
     
     if text == "/start":
@@ -612,10 +473,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_register_steps(update, context)
     elif text == "👤 My Profile":
         await profile(update, context)
-    elif text == "🎫 ကံစမ်းမဲ ဝယ်ယူရန်":
-        await lottery_menu(update, context)
-    elif text == "📊 မှတ်တမ်းကြည့်ရန်":
+    elif text == "📊 မှတ်တမ်းကြည့်ရန️်":
         await transaction_history(update, context)
+    elif text == "💳 လက်ကျန်ကြည့်ရန်":
+        await check_balance(update, context)
     elif text == "💰 ငွေသွင်း":
         await deposit_menu(update, context)
     elif text == "📤 ငွေထုတ်":
@@ -626,8 +487,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_deposit_amount(update, context)
     elif 'pending_withdraw' in context.user_data:
         await handle_withdraw_amount(update, context)
-    elif text == "💳 လက်ကျန်ကြည့်ရန်":
-        await check_balance(update, context)
 
 # Callback Query Handler
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -654,16 +513,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await process_withdraw_selection(update, context, "kpay")
     elif data == "withdraw_wavepay":
         await process_withdraw_selection(update, context, "wavepay")
-    elif data.startswith("buy_"):
-        await query.message.reply_text("🎫 ကျေးဇူးပြု၍ Admin နှင့်ဆက်သွယ်ပါ")
 
-# Main Application
-def main():
+# Main Bot Function
+async def run_bot():
     # Bot Token from environment variable
     BOT_TOKEN = os.getenv('BOT_TOKEN')
     
     if not BOT_TOKEN:
-        logger.error("BOT_TOKEN environment variable is not set")
+        logger.error("❌ BOT_TOKEN environment variable is not set")
         return
     
     try:
@@ -679,16 +536,35 @@ def main():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_handler(CallbackQueryHandler(handle_callback_query))
         
-        print("🤖 Bot is starting...")
-        print("✅ Bot is running successfully!")
-        print("🚀 Press Ctrl+C to stop the bot")
+        logger.info("🤖 Bot is starting...")
         
         # Start the Bot
-        application.run_polling()
+        await application.run_polling()
         
     except Exception as e:
-        logger.error(f"Bot failed to start: {e}")
-        print(f"❌ Error: {e}")
+        logger.error(f"❌ Bot failed to start: {e}")
+
+# Run Flask app and bot together
+def main():
+    import threading
+    
+    # Run Flask in a separate thread
+    def run_flask():
+        port = int(os.environ.get('PORT', 10000))
+        app.run(host='0.0.0.0', port=port, debug=False)
+    
+    # Run bot in main thread
+    def run_bot_sync():
+        asyncio.run(run_bot())
+    
+    # Start Flask in background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    logger.info("🚀 Starting Telegram Bot on Render...")
+    
+    # Run bot in main thread
+    run_bot_sync()
 
 if __name__ == '__main__':
     main()
