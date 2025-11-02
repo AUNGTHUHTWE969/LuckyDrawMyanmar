@@ -5,21 +5,22 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 import datetime
 import random
 import asyncio
+from aiohttp import web
 
 # Configure logging for Render
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     handlers=[
-        logging.StreamHandler()  # This ensures logs go to Render's log system
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Get Bot Token from Environment Variable (for security)
+# Get Bot Token from Environment Variable
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8444084929:AAEIkrCAeuNjSHVUCYE9AEpg6IFqE52rNxc')
 
-# Database (In-memory for demo - in production use PostgreSQL)
+# Database (In-memory)
 users = {}
 payment_accounts = {
     "kpay": [
@@ -39,48 +40,30 @@ payment_accounts = {
 }
 admins = {8070878424: {"username": "Main Admin", "added_by": "system", "added_date": "2024-01-01", "level": "super_admin"}}
 
-channels = {
-    "transaction_channel": "https://t.me/+C-60JUm8CKVlOTBl",
-    "admin_channel": "https://t.me/+_P7OHmGNs8g2MGE1",
-    "official_channel": "@official_channel"
-}
+# Health check endpoint
+async def health_check(request):
+    return web.Response(text="✅ Telegram Bot is running!")
 
-groups = {}
-transactions = {}
-transaction_counter = 1
+async def handle_web_request(request):
+    return web.Response(text="🤖 Telegram Lottery Bot is Alive!")
 
-# Helper Functions
-def is_admin(user_id):
-    return user_id in admins
+async def start_web_server():
+    """Start web server for Render health checks"""
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', handle_web_request)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get('PORT', 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    logger.info(f"🌐 Web server running on port {port}")
+    return runner
 
-def get_random_account(payment_method):
-    accounts = payment_accounts.get(payment_method, [])
-    return random.choice(accounts) if accounts else None
-
-def generate_transaction_id():
-    global transaction_counter
-    txn_id = f"TXN{transaction_counter:06d}"
-    transaction_counter += 1
-    return txn_id
-
-def create_transaction(user_id, amount, transaction_type, payment_method, status="pending"):
-    txn_id = generate_transaction_id()
-    transactions[txn_id] = {
-        "id": txn_id,
-        "user_id": user_id,
-        "user_name": users[user_id]['full_name'],
-        "user_phone": users[user_id]['phone'],
-        "amount": amount,
-        "type": transaction_type,
-        "payment_method": payment_method,
-        "status": status,
-        "created_at": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        "processed_at": None,
-        "processed_by": None
-    }
-    return txn_id
-
-# Keyboards
+# Bot Functions
 def main_menu_keyboard():
     keyboard = [
         ["👤 My Profile", "🎫 ကံစမ်းမဲ ဝယ်ယူရန်"],
@@ -92,7 +75,6 @@ def main_menu_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
-# Start Command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in users:
@@ -107,7 +89,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardMarkup([["/register"]], resize_keyboard=True)
         )
 
-# Register Command
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in users:
@@ -157,12 +138,7 @@ async def handle_register_steps(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=main_menu_keyboard()
         )
 
-# Message Handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if is_admin(update.effective_user.id):
-        # Admin handling would go here
-        pass
-        
     text = update.message.text
     
     if text == "/start":
@@ -191,60 +167,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard()
         )
 
-# Health check endpoint for Render
-from aiohttp import web
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Error occurred: {context.error}")
 
-async def health_check(request):
-    return web.Response(text="Bot is running!")
-
-async def start_web_server():
-    """Start a simple web server for health checks"""
-    app = web.Application()
-    app.router.add_get('/health', health_check)
-    app.router.add_get('/', health_check)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    # Use Render's PORT environment variable or default to 8080
-    port = int(os.environ.get('PORT', 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    
-    logger.info(f"🌐 Health check server running on port {port}")
-    return runner
-
-# Main application setup
 async def main():
-    logger.info("🚀 Starting Telegram Lottery Bot...")
+    logger.info("🚀 Starting Telegram Lottery Bot on Render...")
     
-    # Start health check server
-    web_runner = await start_web_server()
+    # Check if BOT_TOKEN is available
+    if not BOT_TOKEN:
+        logger.error("❌ BOT_TOKEN not found in environment variables!")
+        return
     
     try:
-        # Create Telegram Bot Application
+        # Start web server for health checks
+        web_runner = await start_web_server()
+        
+        # Create bot application
         application = Application.builder().token(BOT_TOKEN).build()
         
         # Add handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("register", register))
+        application.add_handler(CommandHandler("help", start))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_error_handler(error_handler)
         
-        # Start the bot
-        logger.info("✅ Bot is starting...")
+        # Start bot
         await application.initialize()
         await application.start()
         await application.updater.start_polling()
         
-        logger.info("🤖 Bot is now running on Render!")
-        logger.info("📊 Health check available at /health")
+        logger.info("✅ Bot started successfully on Render!")
+        logger.info("📱 Bot is now listening for messages...")
         
-        # Keep the application running
+        # Keep the bot running
         while True:
-            await asyncio.sleep(3600)  # Sleep for 1 hour
+            await asyncio.sleep(3600)
             
     except Exception as e:
-        logger.error(f"❌ Bot error: {e}")
+        logger.error(f"❌ Failed to start bot: {e}")
     finally:
         # Cleanup
         try:
@@ -256,5 +217,4 @@ async def main():
             pass
 
 if __name__ == '__main__':
-    # For Render deployment
     asyncio.run(main())
