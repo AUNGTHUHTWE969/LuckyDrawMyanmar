@@ -4,19 +4,10 @@ import datetime
 import random
 import logging
 import os
-import asyncio
-from flask import Flask
+from flask import Flask, request
 
-# Flask app for health check
+# Flask app for webhook
 app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "🤖 Telegram Bot is running!"
-
-@app.route('/health')
-def health():
-    return "✅ OK"
 
 # Logging setup
 logging.basicConfig(
@@ -45,33 +36,9 @@ payment_accounts = {
 }
 admins = {8070878424: {"username": "Main Admin", "added_by": "system", "added_date": "2024-01-01", "level": "super_admin"}}
 
-# Channel & Group Database
-channels = {
-    "transaction_channel": "https://t.me/+C-60JUm8CKVlOTBl",
-    "admin_channel": "https://t.me/+_P7OHmGNs8g2MGE1",
-    "official_channel": "@official_channel"
-}
-
-groups = {}
-
 # Transaction Database
 transactions = {}
 transaction_counter = 1
-
-# FAQ Database
-faq_data = {
-    "register_how": "Register ပြုလုပ်နည်း",
-    "register_answer": "Start ကိုနှိပ်ပြီး Register လုပ်ပါ",
-    "deposit_how": "ငွေသွင်းနည်း", 
-    "deposit_answer": "ငွေသွင်းမီနူးမှ ရွေးချယ်ပါ",
-    "withdraw_how": "ငွေထုတ်နည်း",
-    "withdraw_answer": "ငွေထုတ်မီနူးမှ ရွေးချယ်ပါ",
-}
-
-# About Us Database
-about_us_data = {
-    "content": "ကျွန်ုပ်တို့၏ စနစ်သည် စိတ်ချရသော ငွေကြေးလွှဲပြောင်းမှုအတွက် ရည်ရွယ်ပါသည်"
-}
 
 # Helper Functions
 def is_admin(user_id):
@@ -112,21 +79,12 @@ def get_user_transactions(user_id):
     user_txns.sort(key=lambda x: x['created_at'], reverse=True)
     return user_txns
 
-def get_pending_transactions():
-    pending_txns = []
-    for txn_id, txn_data in transactions.items():
-        if txn_data['status'] == 'pending':
-            pending_txns.append(txn_data)
-    pending_txns.sort(key=lambda x: x['created_at'])
-    return pending_txns
-
 # Desktop Keyboards
 def main_menu_keyboard():
     keyboard = [
-        ["👤 My Profile", "🎫 ကံစမ်းမဲ ဝယ်ယူရန်"],
-        ["📊 မှတ်တမ်းကြည့်ရန️်", "💳 လက်ကျန်ကြည့်ရန်"],
+        ["👤 My Profile", "💳 လက်ကျန်ကြည့်ရန်"],
         ["💰 ငွေသွင်း", "📤 ငွေထုတ်"],
-        ["🏠 ပင်မမီနူး"]
+        ["📊 မှတ်တမ်းကြည့်ရန်", "🏠 ပင်မမီနူး"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
@@ -150,6 +108,28 @@ def withdraw_method_inline():
         [InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+# Initialize bot application
+def init_bot():
+    BOT_TOKEN = os.getenv('BOT_TOKEN')
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN environment variable is not set")
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("register", register))
+    application.add_handler(CommandHandler("balance", check_balance))
+    application.add_handler(CommandHandler("history", transaction_history))
+    
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
+    
+    return application
+
+# Global bot application instance
+bot_application = init_bot()
 
 # Start Command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -244,10 +224,7 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {user_data['referral_code']}
 """
     
-    await update.message.reply_text(
-        message,
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text(message, parse_mode='Markdown')
 
 # Deposit System
 async def deposit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -428,13 +405,7 @@ async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_data = users[user_id]
     
     if not user_txns:
-        message = """
-📊 **သင့်ငွေသွင်း/ထုတ်မှတ်တမ်းများ**
-
-📝 **မည်သည့်ငွေသွင်း/ထုတ်မှတ်တမ်းမျှမရှိသေးပါ**
-
-💡 **စတင်ငွေသွင်းရန် ငွေသွင်းခလုတ်ကိုနှိပ်ပါ**
-"""
+        message = "📊 **သင့်ငွေသွင်း/ထုတ်မှတ်တမ်းများ**\n\n📝 **မည်သည့်ငွေသွင်း/ထုတ်မှတ်တမ်းမျှမရှိသေးပါ**"
         await update.message.reply_text(message)
         return
     
@@ -473,7 +444,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_register_steps(update, context)
     elif text == "👤 My Profile":
         await profile(update, context)
-    elif text == "📊 မှတ်တမ်းကြည့်ရန️်":
+    elif text == "📊 မှတ်တမ်းကြည့်ရန်":
         await transaction_history(update, context)
     elif text == "💳 လက်ကျန်ကြည့်ရန်":
         await check_balance(update, context)
@@ -497,14 +468,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     
     if data == "main_menu":
         await start(update, context)
-    elif data == "deposit_menu":
-        await deposit_menu(update, context)
-    elif data == "withdraw_menu":
-        await withdraw_menu(update, context)
-    elif data == "check_balance":
-        await check_balance(update, context)
-    elif data == "transaction_history":
-        await transaction_history(update, context)
     elif data == "deposit_kpay":
         await process_deposit_selection(update, context, "kpay")
     elif data == "deposit_wavepay":
@@ -514,57 +477,37 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == "withdraw_wavepay":
         await process_withdraw_selection(update, context, "wavepay")
 
-# Main Bot Function
-async def run_bot():
-    # Bot Token from environment variable
-    BOT_TOKEN = os.getenv('BOT_TOKEN')
-    
-    if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN environment variable is not set")
-        return
-    
-    try:
-        # Create Application
-        application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("register", register))
-        application.add_handler(CommandHandler("balance", check_balance))
-        application.add_handler(CommandHandler("history", transaction_history))
-        
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.add_handler(CallbackQueryHandler(handle_callback_query))
-        
-        logger.info("🤖 Bot is starting...")
-        
-        # Start the Bot
-        await application.run_polling()
-        
-    except Exception as e:
-        logger.error(f"❌ Bot failed to start: {e}")
+# Flask Routes
+@app.route('/')
+def home():
+    return "🤖 Telegram Lottery Bot is running on Render!"
 
-# Run Flask app and bot together
-def main():
-    import threading
-    
-    # Run Flask in a separate thread
-    def run_flask():
-        port = int(os.environ.get('PORT', 10000))
-        app.run(host='0.0.0.0', port=port, debug=False)
-    
-    # Run bot in main thread
-    def run_bot_sync():
-        asyncio.run(run_bot())
-    
-    # Start Flask in background thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    logger.info("🚀 Starting Telegram Bot on Render...")
-    
-    # Run bot in main thread
-    run_bot_sync()
+@app.route('/health')
+def health():
+    return "✅ OK"
+
+@app.route('/webhook', methods=['POST'])
+async def webhook():
+    try:
+        # Process webhook update
+        update = Update.de_json(request.get_json(), bot_application.bot)
+        await bot_application.process_update(update)
+        return "OK"
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return "Error", 500
+
+# Set webhook on startup
+@app.before_request
+def before_first_request():
+    # Set webhook URL
+    webhook_url = f"https://{request.host}/webhook"
+    try:
+        bot_application.bot.set_webhook(webhook_url)
+        logger.info(f"Webhook set to: {webhook_url}")
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
 
 if __name__ == '__main__':
-    main()
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
