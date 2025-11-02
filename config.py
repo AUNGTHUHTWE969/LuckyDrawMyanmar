@@ -1,33 +1,32 @@
 import os
 
 # Bot Configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+class Config:
+    BOT_TOKEN = os.environ.get('BOT_TOKEN', '8444084929:AAEIkrCAeuNjSHVUCYE9AEpg6IFqE52rNxc')
+    
+    # Web server configuration
+    PORT = int(os.environ.get('PORT', 8080))
+    HOST = os.environ.get('HOST', '0.0.0.0')
+    
+    # Admin IDs
+    ADMIN_IDS = [8070878424]
+    
+    # Database configuration (for future use with PostgreSQL)
+    DATABASE_URL = os.environ.get('DATABASE_URL', '')
+    
+    # Logging
+    LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 
-# Admin Configuration
-ADMIN_IDS = [123456789, 987654321]
+# Development configuration
+class DevelopmentConfig(Config):
+    LOG_LEVEL = 'DEBUG'
 
-# Channel & Group Configuration
-ANNOUNCEMENT_CHANNEL = "@luckydrawmyanmarofficial"
+# Production configuration  
+class ProductionConfig(Config):
+    LOG_LEVEL = 'INFO'
 
-# Payment Configuration - Same name and phone for both methods
-PAYMENT_METHODS = {
-    'KPay': {
-        'name': 'AUNG THU HTWE',
-        'phone': '09789999368'
-    },
-    'WavePay': {
-        'name': 'AUNG THU HTWE', 
-        'phone': '09789999368'
-    }
-}
-
-# Lottery Configuration
-DAILY_DRAW_TIME = "21:00"
-TICKET_PRICE = 100
-
-# Security Configuration
-PASSWORD_MIN_LENGTH = 6
-MAX_LOGIN_ATTEMPTS = 5
-
-# Database Configuration
-DATABASE_NAME = "luckydraw_myanmar.db"
+# Choose configuration based on environment
+if os.environ.get('ENVIRONMENT') == 'development':
+    config = DevelopmentConfig()
+else:
+    config = ProductionConfig()
