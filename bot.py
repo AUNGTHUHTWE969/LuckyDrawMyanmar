@@ -1,4 +1,11 @@
 import os
+
+# Debug: Check current directory and files
+print("=== DEBUG INFO ===")
+print(f"Current directory: {os.getcwd()}")
+print(f"Files in directory: {os.listdir('.')}")
+print("==================")
+import os
 import logging
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
