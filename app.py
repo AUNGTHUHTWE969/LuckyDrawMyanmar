@@ -1,9 +1,8 @@
 import os
 import logging
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 import asyncio
-from aiohttp import web
 
 # Setup logging
 logging.basicConfig(
@@ -18,26 +17,6 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', '8444084929:AAEIkrCAeuNjSHVUCYE9AEpg6IFq
 # Simple in-memory database
 users = {}
 
-# Web server for health checks
-async def health_check(request):
-    return web.Response(text="✅ Telegram Lottery Bot is running on Render!")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    port = int(os.environ.get('PORT', 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    
-    logger.info(f"🌐 Web server running on port {port}")
-    return runner
-
-# Keyboard
 def main_menu_keyboard():
     keyboard = [
         ["👤 My Profile", "🎫 ကံစမ်းမဲ ဝယ်ယူရန်"],
@@ -47,8 +26,7 @@ def main_menu_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
-# Bot commands
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: CallbackContext):
     user = update.effective_user
     await update.message.reply_text(
         f"👋 မင်္ဂလာပါ {user.first_name}!\n\n"
@@ -57,7 +35,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id in users:
         await update.message.reply_text(
@@ -69,7 +47,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users[user_id] = {
         'name': update.effective_user.first_name,
         'phone': '09-XXXXXXX',
-        'balance': 10000,  # Starting balance
+        'balance': 10000,
         'registered_at': '2024-01-01',
         'referral_code': f"REF{user_id}"
     }
@@ -84,7 +62,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def profile(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id in users:
         user_data = users[user_id]
@@ -100,12 +78,11 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            "❌ ကျေးဇူးပြု၍ မှတ်ပုံတင်ပါ\n"
-            "မှတ်ပုံတင်ရန် /register ကိုနှိပ်ပါ",
+            "❌ ကျေးဇူးပြု၍ မှတ်ပုံတင်ပါ\nမှတ်ပုံတင်ရန် /register ကိုနှိပ်ပါ",
             reply_markup=main_menu_keyboard()
         )
 
-async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def deposit(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id not in users:
         await update.message.reply_text(
@@ -130,7 +107,7 @@ async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def withdraw(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id not in users:
         await update.message.reply_text(
@@ -151,7 +128,7 @@ async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-async def lottery(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def lottery(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id not in users:
         await update.message.reply_text(
@@ -174,7 +151,7 @@ async def lottery(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def history(update: Update, context: CallbackContext):
     await update.message.reply_text(
         "📊 **မှတ်တမ်းကြည့်ရန်**\n\n"
         "သင့်ငွေသွင်း/ထုတ်မှတ်တမ်းများ ကြည့်ရှုနိုင်ပါသည်။\n\n"
@@ -183,7 +160,7 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def faq(update: Update, context: CallbackContext):
     await update.message.reply_text(
         "❓ **FAQ**\n\n"
         "အမေးများသောမေးခွန်းများ:\n\n"
@@ -198,7 +175,7 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: CallbackContext):
     text = update.message.text
     
     if text == "👤 My Profile":
@@ -221,65 +198,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard()
         )
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Error occurred: {context.error}")
-
-async def main():
-    logger.info("🚀 Starting Telegram Lottery Bot on Render...")
+def main():
+    logger.info("🚀 Starting Telegram Lottery Bot...")
     
-    # Check if BOT_TOKEN is available
-    if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN not found in environment variables!")
-        return
+    # Create application
+    application = Application.builder().token(BOT_TOKEN).build()
     
-    # Start web server for health checks
-    web_runner = await start_web_server()
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("register", register))
+    application.add_handler(CommandHandler("profile", profile))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    try:
-        # Create bot application
-        application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Add handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("register", register))
-        application.add_handler(CommandHandler("profile", profile))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.add_error_handler(error_handler)
-        
-        # Start the bot
-        await application.initialize()
-        await application.start()
-        logger.info("✅ Bot application started")
-        
-        # Start polling with error handling
-        try:
-            await application.updater.start_polling()
-            logger.info("✅ Bot polling started successfully")
-        except Exception as poll_error:
-            logger.error(f"❌ Polling error: {poll_error}")
-            # Try alternative approach
-            await application.updater.start_polling(drop_pending_updates=True)
-            logger.info("✅ Bot polling started with alternative method")
-        
-        logger.info("🤖 Bot is now fully operational!")
-        
-        # Keep the application running
-        while True:
-            await asyncio.sleep(3600)
-            
-    except Exception as e:
-        logger.error(f"❌ Failed to start bot: {e}")
-        # Wait before exiting to see the error in logs
-        await asyncio.sleep(10)
-    finally:
-        # Cleanup
-        logger.info("🛑 Shutting down bot...")
-        try:
-            if 'application' in locals():
-                await application.stop()
-                await application.shutdown()
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+    # Start the bot
+    logger.info("✅ Starting bot polling...")
+    application.run_polling()
+    logger.info("🤖 Bot is running!")
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
