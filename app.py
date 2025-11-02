@@ -1,12 +1,14 @@
+from flask import Flask, request
+import telegram
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import Dispatcher, MessageHandler, Filters, CommandHandler, CallbackQueryHandler
 import datetime
 import random
 import logging
 import os
-from flask import Flask, request
+import json
 
-# Flask app for webhook
+# Flask app
 app = Flask(__name__)
 
 # Logging setup
@@ -15,6 +17,13 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Bot setup
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is not set")
+
+bot = telegram.Bot(token=BOT_TOKEN)
 
 # Database (in-memory for demo)
 users = {}
@@ -34,16 +43,12 @@ payment_accounts = {
         }
     ]
 }
-admins = {8070878424: {"username": "Main Admin", "added_by": "system", "added_date": "2024-01-01", "level": "super_admin"}}
 
 # Transaction Database
 transactions = {}
 transaction_counter = 1
 
 # Helper Functions
-def is_admin(user_id):
-    return user_id in admins
-
 def get_random_account(payment_method):
     accounts = payment_accounts.get(payment_method, [])
     return random.choice(accounts) if accounts else None
@@ -56,11 +61,12 @@ def generate_transaction_id():
 
 def create_transaction(user_id, amount, transaction_type, payment_method, status="pending"):
     txn_id = generate_transaction_id()
+    user_data = users.get(user_id, {})
     transactions[txn_id] = {
         "id": txn_id,
         "user_id": user_id,
-        "user_name": users[user_id]['full_name'],
-        "user_phone": users[user_id]['phone'],
+        "user_name": user_data.get('full_name', 'Unknown'),
+        "user_phone": user_data.get('phone', 'Unknown'),
         "amount": amount,
         "type": transaction_type,
         "payment_method": payment_method,
@@ -86,7 +92,7 @@ def main_menu_keyboard():
         ["💰 ငွေသွင်း", "📤 ငွေထုတ်"],
         ["📊 မှတ်တမ်းကြည့်ရန်", "🏠 ပင်မမီနူး"]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # Inline Keyboards
 def deposit_method_inline():
@@ -109,57 +115,35 @@ def withdraw_method_inline():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# Initialize bot application
-def init_bot():
-    BOT_TOKEN = os.getenv('BOT_TOKEN')
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN environment variable is not set")
-    
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("register", register))
-    application.add_handler(CommandHandler("balance", check_balance))
-    application.add_handler(CommandHandler("history", transaction_history))
-    
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(CallbackQueryHandler(handle_callback_query))
-    
-    return application
-
-# Global bot application instance
-bot_application = init_bot()
-
 # Start Command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update, context):
     user_id = update.effective_user.id
     if user_id in users:
         user_data = users[user_id]
-        await update.message.reply_text(
+        update.message.reply_text(
             f"👋 ပြန်လည်ကြိုဆိုပါတယ် {user_data['full_name']}!",
             reply_markup=main_menu_keyboard()
         )
     else:
-        await update.message.reply_text(
+        update.message.reply_text(
             "မှတ်ပုံတင်ရန် /register ကိုနှိပ်ပါ",
             reply_markup=ReplyKeyboardMarkup([["/register"]], resize_keyboard=True)
         )
 
 # Register Command
-async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def register(update, context):
     user_id = update.effective_user.id
     if user_id in users:
-        await update.message.reply_text(
+        update.message.reply_text(
             "✅ သင်မှတ်ပုံတင်ပြီးသားဖြစ်ပါသည်!",
             reply_markup=main_menu_keyboard()
         )
         return
         
     context.user_data['register_step'] = 'name'
-    await update.message.reply_text("👤 ကျေးဇူးပြု၍ သင့်နာမည်ကိုရိုက်ထည့်ပါ:")
+    update.message.reply_text("👤 ကျေးဇူးပြု၍ သင့်နာမည်ကိုရိုက်ထည့်ပါ:")
 
-async def handle_register_steps(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_register_steps(update, context):
     if 'register_step' not in context.user_data:
         return
     
@@ -168,7 +152,7 @@ async def handle_register_steps(update: Update, context: ContextTypes.DEFAULT_TY
     if step == 'name':
         context.user_data['full_name'] = update.message.text
         context.user_data['register_step'] = 'phone'
-        await update.message.reply_text("📞 ကျေးဇူးပြု၍ သင့်ဖုန်းနံပါတ်ကိုရိုက်ထည့်ပါ:")
+        update.message.reply_text("📞 ကျေးဇူးပြု၍ သင့်ဖုန်းနံပါတ်ကိုရိုက်ထည့်ပါ:")
     
     elif step == 'phone':
         phone = update.message.text
@@ -188,7 +172,7 @@ async def handle_register_steps(update: Update, context: ContextTypes.DEFAULT_TY
         del context.user_data['register_step']
         del context.user_data['full_name']
         
-        await update.message.reply_text(
+        update.message.reply_text(
             f"✅ မှတ်ပုံတင်ပြီးပါပြီ!\n\n"
             f"👤 နာမည်: {full_name}\n"
             f"📞 ဖုန်း: {phone}\n"
@@ -197,10 +181,10 @@ async def handle_register_steps(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 # Profile Function
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def profile(update, context):
     user_id = update.effective_user.id
     if user_id not in users:
-        await update.message.reply_text("❌ ကျေးဇူးပြု၍ မှတ်ပုံတင်ပါ")
+        update.message.reply_text("❌ ကျေးဇူးပြု၍ မှတ်ပုံတင်ပါ")
         return
         
     user_data = users[user_id]
@@ -224,39 +208,39 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {user_data['referral_code']}
 """
     
-    await update.message.reply_text(message, parse_mode='Markdown')
+    update.message.reply_text(message, parse_mode='Markdown')
 
 # Deposit System
-async def deposit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def deposit_menu(update, context):
     user_id = update.effective_user.id
     if user_id not in users:
-        await update.message.reply_text("❌ ငွေသွင်းရန် မှတ်ပုံတင်ရန်လိုအပ်ပါသည်")
+        update.message.reply_text("❌ ငွေသွင်းရန် မှတ်ပုံတင်ရန်လိုအပ်ပါသည်")
         return
     
-    await update.message.reply_text(
+    update.message.reply_text(
         "ငွေသွင်းနည်းလမ်းရွေးပါ:",
         reply_markup=deposit_method_inline()
     )
 
-async def withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def withdraw_menu(update, context):
     user_id = update.effective_user.id
     if user_id not in users:
-        await update.message.reply_text("❌ ငွေထုတ်ရန် မှတ်ပုံတင်ရန်လိုအပ်ပါသည်")
+        update.message.reply_text("❌ ငွေထုတ်ရန် မှတ်ပုံတင်ရန်လိုအပ်ပါသည်")
         return
     
-    await update.message.reply_text(
+    update.message.reply_text(
         "ငွေထုတ်နည်းလမ်းရွေးပါ:",
         reply_markup=withdraw_method_inline()
     )
 
-async def process_deposit_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, method: str):
+def process_deposit_selection(update, context, method: str):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     
     account = get_random_account(method)
     
     if not account:
-        await query.message.reply_text(f"❌ {method.upper()} account မရှိသေးပါ")
+        query.edit_message_text(f"❌ {method.upper()} account မရှိသေးပါ")
         return
     
     context.user_data['pending_deposit'] = {
@@ -273,11 +257,11 @@ async def process_deposit_selection(update: Update, context: ContextTypes.DEFAUL
 ကျေးဇူးပြု၍ သွင်းမည့်ငွေပမာဏကို ရိုက်ထည့်ပါ:
 ဥပမာ: 10000
 """
-    await query.message.reply_text(message)
+    query.edit_message_text(message)
 
-async def process_withdraw_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, method: str):
+def process_withdraw_selection(update, context, method: str):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     
     user_id = query.from_user.id
     user_data = users[user_id]
@@ -286,20 +270,20 @@ async def process_withdraw_selection(update: Update, context: ContextTypes.DEFAU
         'method': method
     }
     
-    await query.message.reply_text(
+    query.edit_message_text(
         f"📤 {method.upper()} ဖြင့်ငွေထုတ်ယူမည့်ပမာဏရိုက်ထည့်ပါ:\n"
         f"လက်ရှိလက်ကျန်: {user_data['balance']:,} Ks"
     )
 
 # Handle Deposit Amount
-async def handle_deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_deposit_amount(update, context):
     if 'pending_deposit' not in context.user_data:
         return
     
     try:
         amount = int(update.message.text)
         if amount <= 0:
-            await update.message.reply_text("❌ ငွေပမာဏသည် 0 ထက်ကြီးရမည်")
+            update.message.reply_text("❌ ငွေပမာဏသည် 0 ထက်ကြီးရမည်")
             return
         
         deposit_info = context.user_data['pending_deposit']
@@ -330,15 +314,15 @@ async def handle_deposit_amount(update: Update, context: ContextTypes.DEFAULT_TY
 
 🕒 **Admin မှစစ်ဆေးအတည်ပြုချိန်:** 2-5 မိနစ်
 """
-        await update.message.reply_text(message)
+        update.message.reply_text(message)
         
         del context.user_data['pending_deposit']
         
     except ValueError:
-        await update.message.reply_text("❌ ကျေးဇူးပြု၍ ဂဏန်းဖြစ်သောငွေပမာဏရိုက်ထည့်ပါ")
+        update.message.reply_text("❌ ကျေးဇူးပြု၍ ဂဏန်းဖြစ်သောငွေပမာဏရိုက်ထည့်ပါ")
 
 # Handle Withdraw Amount
-async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_withdraw_amount(update, context):
     if 'pending_withdraw' not in context.user_data:
         return
     
@@ -348,11 +332,11 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
         user_data = users[user_id]
         
         if amount <= 0:
-            await update.message.reply_text("❌ ငွေပမာဏသည် 0 ထက်ကြီးရမည်")
+            update.message.reply_text("❌ ငွေပမာဏသည် 0 ထက်ကြီးရမည်")
             return
             
         if user_data['balance'] < amount:
-            await update.message.reply_text(f"❌ လက်ကျန်ငွေမလုံလောက်ပါ။\n💳 သင့်လက်ကျန်ငွေ: {user_data['balance']:,} Ks")
+            update.message.reply_text(f"❌ လက်ကျန်ငွေမလုံလောက်ပါ။\n💳 သင့်လက်ကျန်ငွေ: {user_data['balance']:,} Ks")
             return
         
         withdraw_info = context.user_data['pending_withdraw']
@@ -377,28 +361,28 @@ async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_T
 
 🕒 **Admin မှစစ်ဆေးအတည်ပြုချိန်:** 2-5 မိနစ်
 """
-        await update.message.reply_text(message)
+        update.message.reply_text(message)
         
         del context.user_data['pending_withdraw']
         
     except ValueError:
-        await update.message.reply_text("❌ ကျေးဇူးပြု၍ ဂဏန်းဖြစ်သောငွေပမာဏရိုက်ထည့်ပါ")
+        update.message.reply_text("❌ ကျေးဇူးပြု၍ ဂဏန်းဖြစ်သောငွေပမာဏရိုက်ထည့်ပါ")
 
 # Check Balance
-async def check_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def check_balance(update, context):
     user_id = update.effective_user.id
     if user_id not in users:
-        await update.message.reply_text("❌ ကျေးဇူးပြု၍ မှတ်ပုံတင်ပါ")
+        update.message.reply_text("❌ ကျေးဇူးပြု၍ မှတ်ပုံတင်ပါ")
         return
         
     user_data = users[user_id]
-    await update.message.reply_text(f"💳 သင့်လက်ကျန်ငွေ: {user_data['balance']:,} Ks")
+    update.message.reply_text(f"💳 သင့်လက်ကျန်ငွေ: {user_data['balance']:,} Ks")
 
 # Transaction History
-async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def transaction_history(update, context):
     user_id = update.effective_user.id
     if user_id not in users:
-        await update.message.reply_text("❌ ကျေးဇူးပြု၍ မှတ်ပုံတင်ပါ")
+        update.message.reply_text("❌ ကျေးဇူးပြု၍ မှတ်ပုံတင်ပါ")
         return
     
     user_txns = get_user_transactions(user_id)
@@ -406,7 +390,7 @@ async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if not user_txns:
         message = "📊 **သင့်ငွေသွင်း/ထုတ်မှတ်တမ်းများ**\n\n📝 **မည်သည့်ငွေသွင်း/ထုတ်မှတ်တမ်းမျှမရှိသေးပါ**"
-        await update.message.reply_text(message)
+        update.message.reply_text(message)
         return
     
     message = f"""
@@ -430,52 +414,52 @@ async def transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE
         message += f"\n├ 🔢 {txn['id']}"
         message += f"\n└ 📊 {status_text}\n"
     
-    await update.message.reply_text(message, parse_mode='Markdown')
+    update.message.reply_text(message, parse_mode='Markdown')
 
 # Message Handler for Users
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_message(update, context):
     text = update.message.text
     
     if text == "/start":
-        await start(update, context)
+        start(update, context)
     elif text == "/register":
-        await register(update, context)
+        register(update, context)
     elif 'register_step' in context.user_data:
-        await handle_register_steps(update, context)
+        handle_register_steps(update, context)
     elif text == "👤 My Profile":
-        await profile(update, context)
+        profile(update, context)
     elif text == "📊 မှတ်တမ်းကြည့်ရန်":
-        await transaction_history(update, context)
+        transaction_history(update, context)
     elif text == "💳 လက်ကျန်ကြည့်ရန်":
-        await check_balance(update, context)
+        check_balance(update, context)
     elif text == "💰 ငွေသွင်း":
-        await deposit_menu(update, context)
+        deposit_menu(update, context)
     elif text == "📤 ငွေထုတ်":
-        await withdraw_menu(update, context)
+        withdraw_menu(update, context)
     elif text == "🏠 ပင်မမီနူး":
-        await start(update, context)
+        start(update, context)
     elif 'pending_deposit' in context.user_data:
-        await handle_deposit_amount(update, context)
+        handle_deposit_amount(update, context)
     elif 'pending_withdraw' in context.user_data:
-        await handle_withdraw_amount(update, context)
+        handle_withdraw_amount(update, context)
 
 # Callback Query Handler
-async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_callback_query(update, context):
     query = update.callback_query
     data = query.data
     
-    await query.answer()
+    query.answer()
     
     if data == "main_menu":
-        await start(update, context)
+        start(update, context)
     elif data == "deposit_kpay":
-        await process_deposit_selection(update, context, "kpay")
+        process_deposit_selection(update, context, "kpay")
     elif data == "deposit_wavepay":
-        await process_deposit_selection(update, context, "wavepay")
+        process_deposit_selection(update, context, "wavepay")
     elif data == "withdraw_kpay":
-        await process_withdraw_selection(update, context, "kpay")
+        process_withdraw_selection(update, context, "kpay")
     elif data == "withdraw_wavepay":
-        await process_withdraw_selection(update, context, "wavepay")
+        process_withdraw_selection(update, context, "wavepay")
 
 # Flask Routes
 @app.route('/')
@@ -487,26 +471,32 @@ def health():
     return "✅ OK"
 
 @app.route('/webhook', methods=['POST'])
-async def webhook():
-    try:
-        # Process webhook update
-        update = Update.de_json(request.get_json(), bot_application.bot)
-        await bot_application.process_update(update)
-        return "OK"
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return "Error", 500
+def webhook():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+    return "OK"
 
-# Set webhook on startup
-@app.before_request
-def before_first_request():
-    # Set webhook URL
+@app.route('/set_webhook', methods=['GET', 'POST'])
+def set_webhook():
     webhook_url = f"https://{request.host}/webhook"
-    try:
-        bot_application.bot.set_webhook(webhook_url)
-        logger.info(f"Webhook set to: {webhook_url}")
-    except Exception as e:
-        logger.error(f"Failed to set webhook: {e}")
+    success = bot.set_webhook(webhook_url)
+    if success:
+        return f"Webhook setup successful: {webhook_url}"
+    else:
+        return "Webhook setup failed"
+
+# Set up dispatcher
+dispatcher = Dispatcher(bot, None, workers=0)
+
+# Add handlers
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("register", register))
+dispatcher.add_handler(CommandHandler("balance", check_balance))
+dispatcher.add_handler(CommandHandler("history", transaction_history))
+
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+dispatcher.add_handler(CallbackQueryHandler(handle_callback_query))
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
